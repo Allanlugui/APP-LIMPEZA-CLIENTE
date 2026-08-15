@@ -1,0 +1,6 @@
+{
+  "name": "App do Cliente - Limpeza & Organização",
+  "description": "App PWA dedicado para clientes solicitarem serviços de limpeza e organização com cadastro obrigatório, código de segurança de 4 dígitos e acompanhamento.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

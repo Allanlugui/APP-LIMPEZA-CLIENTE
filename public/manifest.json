@@ -1,0 +1,17 @@
+{
+  "short_name": "LimpaOrganiza",
+  "name": "App do Cliente - Limpeza & Organização",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#f8fafc",
+  "theme_color": "#059669",
+  "display": "standalone",
+  "orientation": "portrait",
+  "description": "App PWA dedicado para clientes agendarem serviços de limpeza e organização com código de segurança de 4 dígitos."
+}
