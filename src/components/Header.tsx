@@ -54,11 +54,20 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onOpenProfile}
             id="header-profile-btn"
-            className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-all active:scale-95 relative border border-slate-200 cursor-pointer shadow-2xs focus:outline-none"
+            className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-all active:scale-95 relative border border-slate-200 cursor-pointer shadow-2xs focus:outline-none overflow-hidden"
             title="Meu Perfil e Cadastro"
             aria-label="Perfil do Cliente"
           >
-            <User className="w-4 h-4" />
+            {profile?.photoUrl ? (
+              <img 
+                src={profile.photoUrl} 
+                alt={profile.fullName || 'Foto de Perfil'} 
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <User className="w-4 h-4 text-slate-600" />
+            )}
             {profile?.fullName ? (
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></span>
             ) : (

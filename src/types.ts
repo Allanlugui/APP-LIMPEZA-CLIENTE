@@ -18,6 +18,7 @@ export interface CustomerProfile {
   documentNumber: string;
   email: string;
   phone: string;
+  photoUrl?: string;
   address: Address;
   createdAt: string;
   updatedAt?: string;

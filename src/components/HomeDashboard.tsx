@@ -118,8 +118,17 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
       ) : (
         <div className="bg-emerald-50/90 border border-emerald-200 rounded-2xl p-3 flex items-center justify-between shadow-2xs">
           <div className="flex items-center gap-2.5 truncate pr-2">
-            <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-              <ShieldCheck className="w-4 h-4" />
+            <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 overflow-hidden shadow-xs border border-emerald-300">
+              {profile.photoUrl ? (
+                <img 
+                  src={profile.photoUrl} 
+                  alt={profile.fullName} 
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <ShieldCheck className="w-5 h-5" />
+              )}
             </div>
             <div className="truncate">
               <div className="flex items-center gap-1.5">

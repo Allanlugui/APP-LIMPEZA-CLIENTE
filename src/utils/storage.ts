@@ -15,6 +15,7 @@ export function createBlankProfile(): CustomerProfile {
     documentNumber: '',
     email: '',
     phone: '',
+    photoUrl: '',
     address: {
       cep: '',
       logradouro: '',
