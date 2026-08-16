@@ -321,19 +321,33 @@ export const NewServiceWizard: React.FC<NewServiceWizardProps> = ({
             <Home className="w-3.5 h-3.5" />
           </div>
           <div className="truncate">
-            <p className="font-bold text-slate-800 truncate">
-              {customer.address.logradouro}, {customer.address.numero}
-            </p>
-            <p className="text-[11px] text-slate-500">
-              {customer.address.bairro} - {customer.address.cidade}/{customer.address.uf}
-            </p>
+            {customer.address.logradouro ? (
+              <>
+                <p className="font-bold text-slate-800 truncate">
+                  {customer.address.logradouro}, {customer.address.numero}
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  {customer.address.bairro} - {customer.address.cidade}/{customer.address.uf}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-bold text-amber-700 truncate">
+                  Endereço não cadastrado
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Informe o local no seu perfil para atendimento
+                </p>
+              </>
+            )}
           </div>
         </div>
         <button
+          type="button"
           onClick={onOpenProfile}
-          className="text-emerald-700 font-bold text-[11px] underline shrink-0 hover:text-emerald-800"
+          className="text-emerald-700 font-bold text-[11px] underline shrink-0 hover:text-emerald-800 cursor-pointer"
         >
-          Alterar
+          {customer.address.logradouro ? 'Alterar' : 'Cadastrar'}
         </button>
       </div>
 
@@ -1062,7 +1076,7 @@ export const NewServiceWizard: React.FC<NewServiceWizardProps> = ({
               <div className="bg-slate-50 p-2 rounded-lg">
                 <span className="text-slate-600 block text-[10px]">Cliente:</span>
                 <strong className="text-slate-900 truncate block">
-                  {customer.fullName.split(' ')[0]} ({customer.phone})
+                  {customer.fullName ? customer.fullName.split(' ')[0] : 'Não preenchido'} {customer.phone ? `(${customer.phone})` : ''}
                 </strong>
               </div>
             </div>
@@ -1070,13 +1084,47 @@ export const NewServiceWizard: React.FC<NewServiceWizardProps> = ({
             {/* Endereço */}
             <div className="p-2.5 bg-slate-50 rounded-xl text-xs">
               <span className="text-slate-600 block text-[10px]">Local do Atendimento:</span>
-              <p className="font-semibold text-slate-900">
-                {customer.address.logradouro}, {customer.address.numero} {customer.address.complemento && `- ${customer.address.complemento}`}
-              </p>
-              <p className="text-slate-500 text-[11px]">
-                {customer.address.bairro}, {customer.address.cidade} - {customer.address.uf} (CEP: {customer.address.cep})
-              </p>
+              {customer.address.logradouro ? (
+                <>
+                  <p className="font-semibold text-slate-900">
+                    {customer.address.logradouro}, {customer.address.numero} {customer.address.complemento && `- ${customer.address.complemento}`}
+                  </p>
+                  <p className="text-slate-500 text-[11px]">
+                    {customer.address.bairro}, {customer.address.cidade} - {customer.address.uf} (CEP: {customer.address.cep})
+                  </p>
+                </>
+              ) : (
+                <div className="flex items-center justify-between mt-1">
+                  <p className="font-semibold text-amber-700">Endereço ainda não informado</p>
+                  <button
+                    type="button"
+                    onClick={onOpenProfile}
+                    className="text-emerald-700 font-bold text-xs underline cursor-pointer"
+                  >
+                    Preencher agora
+                  </button>
+                </div>
+              )}
             </div>
+
+            {(!customer.fullName.trim() || !customer.address.logradouro.trim()) && (
+              <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-bold">Cadastro Incompleto</p>
+                  <p className="text-slate-700 text-[11px]">
+                    Para salvar sua solicitação no Supabase e gerar o código de 4 dígitos, é necessário informar seu nome e endereço.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onOpenProfile}
+                    className="mt-1 px-3 py-1.5 bg-emerald-700 text-white font-bold rounded-lg text-xs hover:bg-emerald-800 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    Completar Cadastro no Perfil
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Transparência e Pagamento no Local (Requisito 3) */}

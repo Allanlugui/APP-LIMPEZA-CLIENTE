@@ -59,8 +59,10 @@ export const Header: React.FC<HeaderProps> = ({
             aria-label="Perfil do Cliente"
           >
             <User className="w-4 h-4" />
-            {profile?.fullName && (
+            {profile?.fullName ? (
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></span>
+            ) : (
+              <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-amber-500 border-2 border-white rounded-full animate-pulse"></span>
             )}
           </button>
         </div>

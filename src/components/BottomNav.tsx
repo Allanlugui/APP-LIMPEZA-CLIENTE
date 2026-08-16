@@ -7,12 +7,14 @@ interface BottomNavProps {
   currentTab: AppTab;
   onChangeTab: (tab: AppTab) => void;
   activeOrdersCount: number;
+  isProfileIncomplete?: boolean;
 }
 
 export const BottomNav: React.FC<BottomNavProps> = ({
   currentTab,
   onChangeTab,
   activeOrdersCount,
+  isProfileIncomplete = false,
 }) => {
   const navItems = [
     {
@@ -39,6 +41,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
       label: 'Meu Perfil',
       icon: User,
       btnId: 'nav-tab-profile',
+      isAttention: isProfileIncomplete,
     },
   ];
 
@@ -85,7 +88,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               <div className="relative flex items-center justify-center">
                 <Icon
                   className={`w-5 h-5 transition-transform duration-200 ${
-                    isActive ? 'stroke-[2.5px] scale-110 text-emerald-700' : 'stroke-[1.8px] text-slate-500'
+                    isActive ? 'stroke-[2.5px] scale-110 text-emerald-700' : item.isAttention ? 'stroke-[2px] text-amber-600' : 'stroke-[1.8px] text-slate-500'
                   }`}
                 />
                 {item.badge && (
@@ -93,9 +96,18 @@ export const BottomNav: React.FC<BottomNavProps> = ({
                     {item.badge}
                   </span>
                 )}
+                {item.isAttention && !item.badge && !isActive && (
+                  <span className="absolute -top-1 -right-1.5 w-2.5 h-2.5 bg-amber-500 rounded-full border-2 border-white animate-pulse" />
+                )}
               </div>
 
-              <span className={`text-[11px] mt-1 tracking-tight leading-none ${isActive ? 'text-emerald-800 font-extrabold' : 'text-slate-500'}`}>
+              <span className={`text-[11px] mt-1 tracking-tight leading-none ${
+                isActive 
+                  ? 'text-emerald-800 font-extrabold' 
+                  : item.isAttention 
+                    ? 'text-amber-700 font-bold' 
+                    : 'text-slate-500'
+              }`}>
                 {item.label}
               </span>
 

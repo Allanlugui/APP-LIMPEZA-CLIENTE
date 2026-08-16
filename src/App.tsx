@@ -31,47 +31,39 @@ import { OrderReceiptModal } from './components/OrderReceiptModal';
 import { PwaInstallBanner } from './components/PwaInstallBanner';
 
 export default function App() {
-  const [profile, setProfile] = useState<CustomerProfile>(() => getStoredProfile() || {
-    id: 'cust_01',
-    fullName: '',
-    documentType: 'CPF',
-    documentNumber: '',
-    email: '',
-    phone: '',
-    address: {
-      cep: '',
-      logradouro: '',
-      numero: '',
-      bairro: '',
-      cidade: '',
-      uf: '',
-    },
-    createdAt: new Date().toISOString(),
-  });
-
+  const [profile, setProfile] = useState<CustomerProfile>(() => getStoredProfile());
   const [requests, setRequests] = useState<ServiceRequest[]>(() => getStoredRequests());
+  const [isLoadingRequests, setIsLoadingRequests] = useState<boolean>(true);
   const [currentTab, setCurrentTab] = useState<AppTab>('home');
   const [selectedRequest, setSelectedRequest] = useState<ServiceRequest | null>(null);
   const [receiptRequest, setReceiptRequest] = useState<ServiceRequest | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Sincronização inicial com Supabase
+  // Sincronização em tempo real com Supabase (consultas reais)
   useEffect(() => {
+    let isMounted = true;
+
     async function sincronizarSupabase() {
-      if (isSupabaseConfigured) {
-        const dadosRemotos = await buscarSolicitacoesSupabase();
-        if (dadosRemotos && dadosRemotos.length > 0) {
-          // Mesclar dados remotos com locais evitando duplicados por ID
-          setRequests((prev) => {
-            const map = new Map<string, ServiceRequest>();
-            prev.forEach((r) => map.set(r.id, r));
-            dadosRemotos.forEach((r) => map.set(r.id, r));
-            const merged = Array.from(map.values()).sort(
-              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            );
-            saveStoredRequests(merged);
-            return merged;
-          });
+      setIsLoadingRequests(true);
+      try {
+        if (isSupabaseConfigured) {
+          const dadosRemotos = await buscarSolicitacoesSupabase();
+          if (isMounted) {
+            setRequests(dadosRemotos);
+            saveStoredRequests(dadosRemotos);
+          }
+        } else {
+          // Modo local
+          const localRequests = getStoredRequests();
+          if (isMounted) {
+            setRequests(localRequests);
+          }
+        }
+      } catch (err) {
+        console.error('Erro ao sincronizar com banco de dados:', err);
+      } finally {
+        if (isMounted) {
+          setIsLoadingRequests(false);
         }
       }
     }
@@ -98,6 +90,7 @@ export default function App() {
     });
 
     return () => {
+      isMounted = false;
       unsubscribe();
     };
   }, []);
@@ -107,6 +100,12 @@ export default function App() {
     ['solicitado', 'aprovado', 'a_caminho', 'em_andamento'].includes(r.status)
   );
   const primaryActiveRequest = activeRequests[0];
+
+  const isProfileIncomplete =
+    !profile.fullName?.trim() ||
+    !profile.documentNumber?.trim() ||
+    !profile.phone?.trim() ||
+    !profile.address?.logradouro?.trim();
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -264,6 +263,7 @@ export default function App() {
                 ) : (
                   <OrdersListView
                     requests={requests}
+                    isLoading={isLoadingRequests}
                     onSelectRequest={(req) => setSelectedRequest(req)}
                     onNewRequest={() => setCurrentTab('new-service')}
                     onViewReceipt={(req) => setReceiptRequest(req)}
@@ -293,6 +293,7 @@ export default function App() {
         {/* Bottom Navigation */}
         <BottomNav
           currentTab={currentTab}
+          isProfileIncomplete={isProfileIncomplete}
           onChangeTab={(tab) => {
             if (tab === 'orders' && !selectedRequest && primaryActiveRequest) {
               setSelectedRequest(primaryActiveRequest);

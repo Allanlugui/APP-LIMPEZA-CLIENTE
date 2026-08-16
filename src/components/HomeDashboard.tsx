@@ -13,7 +13,10 @@ import {
   QrCode, 
   Home, 
   FileText,
-  UserCheck
+  UserCheck,
+  AlertCircle,
+  IdCard,
+  MapPin
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { CustomerProfile, ServiceRequest } from '../types';
@@ -38,7 +41,13 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
   onOpenOrders,
   onOpenProfile,
 }) => {
-  const firstName = profile?.fullName?.split(' ')[0] || 'Cliente';
+  const hasName = Boolean(profile.fullName?.trim());
+  const hasDoc = Boolean(profile.documentNumber?.trim());
+  const hasPhone = Boolean(profile.phone?.trim());
+  const hasAddress = Boolean(profile.address?.logradouro?.trim() && profile.address?.numero?.trim());
+  const isProfileComplete = hasName && hasDoc && hasPhone && hasAddress;
+
+  const firstName = hasName ? profile.fullName.split(' ')[0] : 'Cliente';
 
   return (
     <motion.div 
@@ -47,6 +56,95 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
       transition={{ duration: 0.2 }}
       className="content-bottom-clearance pt-2 px-4 max-w-md mx-auto space-y-4 select-none"
     >
+      {/* CARD TOP DE IDENTIFICAÇÃO E CADASTRO */}
+      {!isProfileComplete ? (
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.97 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="bg-amber-50/90 border-2 border-amber-300/80 rounded-3xl p-4 shadow-sm space-y-3"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm shadow-amber-500/30">
+                <IdCard className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="bg-amber-200 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                  Passo Obrigatório
+                </span>
+                <h2 className="text-sm font-extrabold text-slate-900 leading-tight mt-0.5">
+                  Complete seus Dados Cadastrais
+                </h2>
+              </div>
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Informe seu <strong>Nome, CPF/RG e Endereço</strong> para validar atendimentos e gerar o código de segurança no Supabase.
+          </p>
+
+          {/* Checklist de campos pendentes */}
+          <div className="grid grid-cols-2 gap-1.5 pt-1">
+            <div className={`p-2 rounded-xl text-[11px] font-semibold flex items-center gap-1.5 ${hasName ? 'bg-emerald-100 text-emerald-800' : 'bg-white text-slate-600 border border-amber-200'}`}>
+              {hasName ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
+              <span className="truncate">Nome Completo</span>
+            </div>
+            <div className={`p-2 rounded-xl text-[11px] font-semibold flex items-center gap-1.5 ${hasDoc ? 'bg-emerald-100 text-emerald-800' : 'bg-white text-slate-600 border border-amber-200'}`}>
+              {hasDoc ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
+              <span className="truncate">CPF ou RG</span>
+            </div>
+            <div className={`p-2 rounded-xl text-[11px] font-semibold flex items-center gap-1.5 ${hasPhone ? 'bg-emerald-100 text-emerald-800' : 'bg-white text-slate-600 border border-amber-200'}`}>
+              {hasPhone ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
+              <span className="truncate">Telefone WhatsApp</span>
+            </div>
+            <div className={`p-2 rounded-xl text-[11px] font-semibold flex items-center gap-1.5 ${hasAddress ? 'bg-emerald-100 text-emerald-800' : 'bg-white text-slate-600 border border-amber-200'}`}>
+              {hasAddress ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
+              <span className="truncate">Endereço Completo</span>
+            </div>
+          </div>
+
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            whileHover={{ scale: 1.01 }}
+            onClick={onOpenProfile}
+            id="home-btn-complete-profile"
+            className="w-full py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 shadow-md shadow-emerald-700/20 transition-all cursor-pointer focus:outline-none"
+          >
+            <UserCheck className="w-4 h-4" />
+            Preencher Meus Dados Cadastrais Agora
+            <ArrowRight className="w-3.5 h-3.5" />
+          </motion.button>
+        </motion.div>
+      ) : (
+        <div className="bg-emerald-50/90 border border-emerald-200 rounded-2xl p-3 flex items-center justify-between shadow-2xs">
+          <div className="flex items-center gap-2.5 truncate pr-2">
+            <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+              <ShieldCheck className="w-4 h-4" />
+            </div>
+            <div className="truncate">
+              <div className="flex items-center gap-1.5">
+                <span className="font-extrabold text-xs text-slate-900 truncate">
+                  {profile.fullName}
+                </span>
+                <span className="bg-emerald-200 text-emerald-900 text-[9px] font-black px-1.5 py-0.2 rounded-md uppercase">
+                  Verificado
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 truncate">
+                {profile.documentType}: {profile.documentNumber} • {profile.address.bairro || profile.address.cidade}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenProfile}
+            className="text-emerald-800 hover:text-emerald-950 font-bold text-xs shrink-0 underline cursor-pointer"
+          >
+            Editar Perfil
+          </button>
+        </div>
+      )}
+
       {/* Welcome Banner */}
       <div className="bg-gradient-to-br from-emerald-800 via-emerald-700 to-teal-800 text-white rounded-3xl p-5 shadow-lg relative overflow-hidden">
         <div className="absolute -right-8 -bottom-8 w-36 h-36 bg-white/10 rounded-full blur-xl pointer-events-none" />
@@ -57,7 +155,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
               Ambiente Seguro
             </span>
             <span className="text-xs text-emerald-200 flex items-center gap-1 font-semibold">
-              <ShieldCheck className="w-4 h-4" /> Cliente Verificado
+              <ShieldCheck className="w-4 h-4" /> Atendimento 5S
             </span>
           </div>
 

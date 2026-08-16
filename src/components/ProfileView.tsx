@@ -39,6 +39,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
+  React.useEffect(() => {
+    setFormData(profile);
+    setDocType(profile.documentType || 'CPF');
+  }, [profile]);
+
   // Field validation checks
   const errors = {
     fullName: !formData.fullName.trim() 
