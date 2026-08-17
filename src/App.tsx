@@ -20,7 +20,9 @@ import {
 } from './utils/storage';
 import { 
   buscarSolicitacoesSupabase, 
+  salvarSolicitacaoSupabase,
   atualizarStatusSolicitacaoSupabase, 
+  atualizarPerfilClienteSupabase,
   inscreverAtualizacoesTempoReal, 
   isSupabaseConfigured 
 } from './lib/supabase';
@@ -84,7 +86,11 @@ export default function App() {
       setIsLoadingRequests(true);
       try {
         if (isSupabaseConfigured) {
-          const dadosRemotos = await buscarSolicitacoesSupabase();
+          const dadosRemotos = await buscarSolicitacoesSupabase(
+            authSession?.customer?.id,
+            authSession?.customer?.documentNumber,
+            authSession?.customer?.email
+          );
           if (isMounted) {
             setRequests(dadosRemotos);
             saveStoredRequests(dadosRemotos);
@@ -132,7 +138,7 @@ export default function App() {
     };
   }, [authSession]);
 
-  const handleSaveProfile = (updated: CustomerProfile) => {
+  const handleSaveProfile = async (updated: CustomerProfile) => {
     setProfile(updated);
     saveStoredProfile(updated);
     if (authSession) {
@@ -143,15 +149,19 @@ export default function App() {
       saveStoredAuthSession(updatedSession);
       setAuthSession(updatedSession);
     }
+    await atualizarPerfilClienteSupabase(updated);
     showToast('Dados cadastrais salvos com sucesso!');
   };
 
-  const handleNewRequestSubmitted = (newRequest: ServiceRequest) => {
+  const handleNewRequestSubmitted = async (newRequest: ServiceRequest) => {
     const updated = addServiceRequest(newRequest);
     setRequests(updated);
     setSelectedRequest(newRequest);
     setCurrentTab('orders');
     showToast(`Solicitação #${newRequest.id} registrada! Código: ${newRequest.securityCode}`);
+    
+    // Persistência imediata no Supabase
+    await salvarSolicitacaoSupabase(newRequest);
   };
 
   const handleUpdateStatus = async (requestId: string, newStatus: ServiceStatus) => {
@@ -163,7 +173,7 @@ export default function App() {
     if (found) {
       setSelectedRequest(found);
       const lastTimelineEntry = found.statusTimeline[found.statusTimeline.length - 1];
-      // Persistir no Supabase em paralelo
+      // Persistir no Supabase em tempo real
       await atualizarStatusSolicitacaoSupabase(requestId, newStatus, lastTimelineEntry);
     }
   };

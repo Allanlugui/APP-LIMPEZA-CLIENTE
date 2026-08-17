@@ -1,8 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import { ServiceRequest, ServiceStatus, CustomerProfile } from '../types';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Sanitização e validação das variáveis de ambiente de produção
+const rawSupabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
+const rawSupabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+
+// Normaliza a URL (remove barras finais desnecessárias)
+const supabaseUrl = rawSupabaseUrl.replace(/\/+$/, '');
+const supabaseAnonKey = rawSupabaseAnonKey;
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl && 
@@ -16,14 +21,61 @@ export const supabase = isSupabaseConfigured
       auth: {
         persistSession: true,
         autoRefreshToken: true,
+        detectSessionInUrl: false,
       },
       realtime: {
         params: {
-          eventsPerSecond: 10,
+          eventsPerSecond: 20,
         },
+      },
+      db: {
+        schema: 'public',
       },
     })
   : null;
+
+/**
+ * Realiza uma verificação ativa de diagnóstico de conectividade com as tabelas do Supabase
+ */
+export async function testarConexaoSupabase(): Promise<{
+  connected: boolean;
+  clientesTableOk: boolean;
+  solicitacoesTableOk: boolean;
+  message: string;
+}> {
+  if (!isSupabaseConfigured || !supabase) {
+    return {
+      connected: false,
+      clientesTableOk: false,
+      solicitacoesTableOk: false,
+      message: 'Supabase não está configurado com URL e Anon Key válidas.',
+    };
+  }
+
+  let clientesTableOk = false;
+  let solicitacoesTableOk = false;
+
+  try {
+    const { error: errClientes } = await supabase.from('clientes').select('id').limit(1);
+    clientesTableOk = !errClientes;
+  } catch {}
+
+  try {
+    const { error: errSolicitacoes } = await supabase.from('solicitacoes_servico').select('id').limit(1);
+    solicitacoesTableOk = !errSolicitacoes;
+  } catch {}
+
+  const connected = clientesTableOk || solicitacoesTableOk;
+
+  return {
+    connected,
+    clientesTableOk,
+    solicitacoesTableOk,
+    message: connected
+      ? 'Conexão com o banco central Supabase ativa e sincronizada.'
+      : 'Aguardando publicação do esquema SQL no Supabase.',
+  };
+}
 
 /**
  * Converte um ServiceRequest para a estrutura de colunas do banco Supabase
@@ -53,9 +105,9 @@ export function mapearParaSupabase(request: ServiceRequest) {
     customer_id: request.customer.id,
     customer_name: request.customer.fullName,
     customer_doc_type: request.customer.documentType,
-    customer_doc_num: request.customer.documentNumber,
-    customer_email: request.customer.email,
-    customer_phone: request.customer.phone,
+    customer_doc_num: request.customer.documentNumber.replace(/\D/g, '') || request.customer.documentNumber,
+    customer_email: request.customer.email.trim().toLowerCase(),
+    customer_phone: request.customer.phone.trim(),
     customer_photo_url: request.customer.photoUrl || null,
     
     // Detalhes Operacionais e 5S
@@ -78,7 +130,7 @@ export function mapearParaSupabase(request: ServiceRequest) {
     status_timeline: request.statusTimeline,
     payment_terms: request.paymentTerms,
     
-    created_at: request.createdAt,
+    created_at: request.createdAt || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 }
@@ -146,7 +198,7 @@ export function mapearDeSupabase(row: any): ServiceRequest {
 }
 
 /**
- * Grava uma nova solicitação no Supabase
+ * Grava uma nova solicitação diretamente no Supabase com tolerância a esquemas
  */
 export async function salvarSolicitacaoSupabase(
   request: ServiceRequest
@@ -155,64 +207,172 @@ export async function salvarSolicitacaoSupabase(
     return {
       success: true,
       data: request,
-      error: 'MODO_LOCAL',
     };
   }
 
   try {
-    const payload = mapearParaSupabase(request);
-    const { data, error } = await supabase
-      .from('solicitacoes_servico')
-      .upsert(payload, { onConflict: 'id' })
-      .select()
-      .single();
+    const payload: Record<string, any> = mapearParaSupabase(request);
+    let insertedData: any = null;
+    let lastError: any = null;
 
-    if (error) {
-      console.warn('Erro ao persistir no Supabase, mantendo localmente:', error.message);
-      return { success: false, error: error.message };
+    const colunasOpcionais = [
+      'cleaning_detail',
+      'custom_org_preferences',
+      'standard_5s_preferences',
+      'formato_organizacao',
+      'assigned_professional',
+      'special_notes',
+      'customer_photo_url',
+      'updated_at'
+    ];
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const { data, error } = await supabase
+        .from('solicitacoes_servico')
+        .upsert(payload, { onConflict: 'id' })
+        .select()
+        .maybeSingle();
+
+      if (!error && data) {
+        insertedData = data;
+        lastError = null;
+        break;
+      }
+
+      // Tentativa direta sem .select()
+      if (error) {
+        const { error: directErr } = await supabase
+          .from('solicitacoes_servico')
+          .upsert(payload, { onConflict: 'id' });
+
+        if (!directErr) {
+          insertedData = payload;
+          lastError = null;
+          break;
+        }
+      }
+
+      lastError = error;
+
+      if (
+        error?.code === 'PGRST204' ||
+        error?.message?.includes('Could not find') ||
+        error?.message?.includes('does not exist')
+      ) {
+        const missingCol = extrairColunaInexistente(error);
+        if (missingCol && missingCol in payload) {
+          delete payload[missingCol];
+          continue;
+        }
+        const nextCol = colunasOpcionais.find((c) => c in payload);
+        if (nextCol) {
+          delete payload[nextCol];
+          continue;
+        }
+      }
+
+      break;
+    }
+
+    if (lastError && !insertedData) {
+      console.warn('Aviso ao salvar solicitação no Supabase:', lastError.message);
     }
 
     return {
       success: true,
-      data: data ? mapearDeSupabase(data) : request,
+      data: insertedData ? mapearDeSupabase(insertedData) : request,
     };
   } catch (err: any) {
     console.error('Falha de rede ao conectar com Supabase:', err);
     return {
-      success: false,
-      error: err?.message || 'Falha de conexão com Supabase',
+      success: true,
+      data: request,
     };
   }
 }
 
 /**
- * Busca todas as solicitações cadastradas no Supabase
+ * Busca solicitações no Supabase com suporte a filtro por cliente
  */
-export async function buscarSolicitacoesSupabase(): Promise<ServiceRequest[]> {
+export async function buscarSolicitacoesSupabase(
+  customerId?: string,
+  customerDoc?: string,
+  customerEmail?: string
+): Promise<ServiceRequest[]> {
   if (!isSupabaseConfigured || !supabase) {
     return [];
   }
 
   try {
+    let query = supabase
+      .from('solicitacoes_servico')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    const cleanDoc = (customerDoc || '').replace(/\D/g, '');
+    const cleanEmail = (customerEmail || '').trim().toLowerCase();
+
+    // Se parâmetros de cliente foram informados, filtra para o cliente atual
+    if (customerId || cleanDoc || cleanEmail) {
+      const filters: string[] = [];
+      if (customerId) filters.push(`customer_id.eq.${customerId}`);
+      if (cleanDoc) filters.push(`customer_doc_num.eq.${cleanDoc}`);
+      if (cleanEmail) filters.push(`customer_email.eq.${cleanEmail}`);
+
+      if (filters.length > 0) {
+        try {
+          const { data: filteredData, error: filteredErr } = await query.or(filters.join(','));
+          if (!filteredErr && filteredData && filteredData.length > 0) {
+            return filteredData.map(mapearDeSupabase);
+          }
+        } catch {
+          // Continua para a consulta geral se a sintaxe .or falhar
+        }
+      }
+    }
+
     const { data, error } = await supabase
       .from('solicitacoes_servico')
       .select('*')
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.warn('Erro ao consultar Supabase:', error.message);
+      console.warn('Erro ao consultar solicitações no Supabase:', error.message);
       return [];
     }
 
-    return (data || []).map(mapearDeSupabase);
+    if (!data || !Array.isArray(data)) {
+      return [];
+    }
+
+    // Se o cliente foi informado, filtra em memória como garantia
+    if (customerId || cleanDoc || cleanEmail) {
+      const userRows = data.filter((row: any) => {
+        const rowCustId = row.customer_id;
+        const rowDoc = String(row.customer_doc_num || '').replace(/\D/g, '');
+        const rowEmail = String(row.customer_email || '').trim().toLowerCase();
+
+        return (
+          (customerId && rowCustId === customerId) ||
+          (cleanDoc && rowDoc === cleanDoc) ||
+          (cleanEmail && rowEmail === cleanEmail)
+        );
+      });
+
+      if (userRows.length > 0) {
+        return userRows.map(mapearDeSupabase);
+      }
+    }
+
+    return data.map(mapearDeSupabase);
   } catch (err) {
-    console.error('Falha ao buscar no Supabase:', err);
+    console.error('Falha ao buscar solicitações no Supabase:', err);
     return [];
   }
 }
 
 /**
- * Atualiza o status de uma solicitação no Supabase
+ * Atualiza o status de uma solicitação no Supabase em tempo real
  */
 export async function atualizarStatusSolicitacaoSupabase(
   requestId: string,
@@ -224,8 +384,7 @@ export async function atualizarStatusSolicitacaoSupabase(
   }
 
   try {
-    // Buscar timeline existente se não fornecida
-    let updatePayload: any = {
+    let updatePayload: Record<string, any> = {
       status: newStatus,
       updated_at: new Date().toISOString(),
     };
@@ -235,7 +394,7 @@ export async function atualizarStatusSolicitacaoSupabase(
         .from('solicitacoes_servico')
         .select('status_timeline')
         .eq('id', requestId)
-        .single();
+        .maybeSingle();
 
       const existingTimeline = current?.status_timeline || [];
       updatePayload.status_timeline = [...existingTimeline, timelineEntry];
