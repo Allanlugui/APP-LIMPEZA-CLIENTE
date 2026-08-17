@@ -215,31 +215,16 @@ export const NewServiceWizard: React.FC<NewServiceWizardProps> = ({
       scheduledDate: scheduledDate,
       timeSlot: timeSlot,
       specialNotes: specialNotes,
-      status: 'aprovado', // Direct instant approval with security code!
+      status: 'solicitado',
       estimatedPrice: totalPrice,
       estimatedHours: totalHours,
-      assignedProfessional: {
-        id: 'prof_designated',
-        name: 'Maria Cristina Silva',
-        photoUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=300',
-        rating: 4.98,
-        servicesCount: 146,
-        badgeVerified: true,
-        phone: '(11) 97123-8890',
-        documentMasked: 'RG 42.***.***-8 (Verificado)',
-        vehicle: 'Profissional uniformizada com identificação oficial',
-      },
+      assignedProfessional: undefined,
       createdAt: new Date().toISOString(),
       statusTimeline: [
         {
           status: 'solicitado',
           timestamp: new Date().toISOString(),
-          description: 'Solicitação registrada no sistema com sucesso.',
-        },
-        {
-          status: 'aprovado',
-          timestamp: new Date().toISOString(),
-          description: `Solicitação Aprovada! Código de Segurança ${securityCode} emitido. Apresente ao colaborador ao chegar no imóvel.`,
+          description: `Solicitação registrada com sucesso no sistema. Código de Segurança ${securityCode} gerado para validação com a equipe operacional.`,
         },
       ],
       paymentTerms: {

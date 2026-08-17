@@ -101,7 +101,9 @@ export function updateServiceRequestStatus(requestId: string, newStatus: Service
     if (req.id !== requestId) return req;
     
     let desc = '';
-    if (newStatus === 'a_caminho') {
+    if (newStatus === 'aprovado') {
+      desc = `Solicitação confirmada e profissional ${req.assignedProfessional?.name || 'designado'} atribuído pela equipe operacional.`;
+    } else if (newStatus === 'a_caminho') {
       desc = `Profissional ${req.assignedProfessional?.name || 'designado'} está a caminho do seu endereço. Tenha o código ${req.securityCode} em mãos.`;
     } else if (newStatus === 'em_andamento') {
       desc = `Código de Segurança ${req.securityCode} confirmado no local! Atendimento em andamento.`;

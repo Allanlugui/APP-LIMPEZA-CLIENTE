@@ -259,6 +259,124 @@ export async function atualizarStatusSolicitacaoSupabase(
 }
 
 /**
+ * Cancela uma solicitação no Supabase
+ */
+export async function cancelarSolicitacaoSupabase(
+  requestId: string,
+  reason?: string
+): Promise<{ success: boolean; error?: string }> {
+  const timelineEntry = {
+    status: 'cancelado' as ServiceStatus,
+    timestamp: new Date().toISOString(),
+    description: reason || 'Solicitação cancelada pelo cliente no aplicativo.',
+  };
+  return atualizarStatusSolicitacaoSupabase(requestId, 'cancelado', timelineEntry);
+}
+
+/**
+ * Script SQL Oficial do Supabase para criação das tabelas, índices,
+ * realtime publication e políticas RLS de segurança para o Sistema e App Operacional.
+ */
+export const SUPABASE_DATABASE_SCHEMA_SQL = `
+-- =========================================================================
+-- ESQUEMA OFICIAL DE PRODUÇÃO SUPABASE: SISTEMA + APP CLIENTE + APP OPERACIONAL
+-- =========================================================================
+
+-- 1. Criação da tabela de Solicitações de Serviço
+CREATE TABLE IF NOT EXISTS public.solicitacoes_servico (
+  id TEXT PRIMARY KEY,
+  codigo_ordem TEXT NOT NULL,
+  codigo_confirmacao VARCHAR(4) NOT NULL,
+  
+  -- Tipo e Formato do Atendimento
+  tipo_servico TEXT NOT NULL,
+  formato_organizacao TEXT,
+  
+  -- Localização e Imóvel
+  endereco JSONB NOT NULL,
+  detalhes_imovel JSONB NOT NULL,
+  
+  -- Identificação do Cliente
+  customer_id TEXT NOT NULL,
+  customer_name TEXT NOT NULL,
+  customer_doc_type TEXT NOT NULL,
+  customer_doc_num TEXT NOT NULL,
+  customer_email TEXT,
+  customer_phone TEXT NOT NULL,
+  customer_photo_url TEXT,
+  
+  -- Detalhes de Limpeza e Organização (5S / Custom)
+  cleaning_detail TEXT,
+  custom_org_preferences JSONB,
+  standard_5s_preferences JSONB,
+  
+  -- Agendamento
+  scheduled_date TEXT NOT NULL,
+  time_slot TEXT NOT NULL,
+  special_notes TEXT,
+  
+  -- Status e Valores
+  status TEXT NOT NULL DEFAULT 'solicitado',
+  estimated_price NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+  estimated_hours NUMERIC(4, 1) NOT NULL DEFAULT 4.0,
+  
+  -- Operacional & Linha do Tempo
+  assigned_professional JSONB,
+  status_timeline JSONB NOT NULL DEFAULT '[]'::jsonb,
+  payment_terms JSONB NOT NULL DEFAULT '{"payOnSite": true}'::jsonb,
+  
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 2. Índices de alta performance para busca e filtros de status
+CREATE INDEX IF NOT EXISTS idx_solicitacoes_customer_id ON public.solicitacoes_servico(customer_id);
+CREATE INDEX IF NOT EXISTS idx_solicitacoes_status ON public.solicitacoes_servico(status);
+CREATE INDEX IF NOT EXISTS idx_solicitacoes_created_at ON public.solicitacoes_servico(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_solicitacoes_scheduled_date ON public.solicitacoes_servico(scheduled_date);
+
+-- 3. Habilitação de Row Level Security (RLS) - Regra Rígida de Segurança
+ALTER TABLE public.solicitacoes_servico ENABLE ROW LEVEL SECURITY;
+
+-- Política de leitura e gravação para a aplicação cliente e operacional
+CREATE POLICY "Permitir leitura de solicitacoes" 
+  ON public.solicitacoes_servico 
+  FOR SELECT 
+  TO anon, authenticated 
+  USING (true);
+
+CREATE POLICY "Permitir criacao de solicitacoes" 
+  ON public.solicitacoes_servico 
+  FOR INSERT 
+  TO anon, authenticated 
+  WITH CHECK (true);
+
+CREATE POLICY "Permitir atualizacao operacional de solicitacoes" 
+  ON public.solicitacoes_servico 
+  FOR UPDATE 
+  TO anon, authenticated 
+  USING (true)
+  WITH CHECK (true);
+
+-- 4. Habilitação do Supabase Realtime para a tabela solicitacoes_servico
+ALTER PUBLICATION supabase_realtime ADD TABLE public.solicitacoes_servico;
+
+-- 5. Bucket do Supabase Storage para Avatares / Fotos de Perfil
+-- Execute no SQL Editor do Supabase se o bucket não existir:
+INSERT INTO storage.buckets (id, name, public) 
+VALUES ('avatars', 'avatars', true)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "Permitir upload publico de avatars" 
+ON storage.objects FOR INSERT TO anon, authenticated 
+WITH CHECK (bucket_id = 'avatars');
+
+CREATE POLICY "Permitir leitura publica de avatars" 
+ON storage.objects FOR SELECT TO anon, authenticated 
+USING (bucket_id = 'avatars');
+`;
+
+/**
  * Inscrição em Tempo Real para mudanças na tabela `solicitacoes_servico`
  */
 export function inscreverAtualizacoesTempoReal(

@@ -17,7 +17,6 @@ import {
   Banknote, 
   ChevronDown,
   ChevronUp,
-  RotateCcw,
   Radio,
   Database
 } from 'lucide-react';
@@ -233,8 +232,8 @@ export const ActiveOrderTracking: React.FC<ActiveOrderTrackingProps> = ({
         </div>
       </div>
 
-      {/* PROFISSIONAL DESIGNADO */}
-      {request.assignedProfessional && (
+      {/* PROFISSIONAL DESIGNADO OU AGUARDANDO DESIGNAÇÃO */}
+      {request.assignedProfessional ? (
         <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
@@ -292,6 +291,49 @@ export const ActiveOrderTracking: React.FC<ActiveOrderTrackingProps> = ({
               WhatsApp
             </motion.a>
           </div>
+        </div>
+      ) : (
+        <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center">
+                <Clock className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-xs font-extrabold text-slate-900">
+                  Aguardando Equipe Operacional
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  Triagem e designação pelo Sistema
+                </p>
+              </div>
+            </div>
+            <span className="flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded-md">
+              <Radio className="w-2.5 h-2.5 animate-pulse text-amber-600" />
+              Ao Vivo
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Sua solicitação foi registrada no banco de dados e enviada para o <strong>App Operacional</strong>. Assim que um colaborador qualificado for designado, os dados e contatos serão sincronizados instantaneamente nesta tela.
+          </p>
+
+          {request.status === 'solicitado' && (
+            <div className="pt-1">
+              <button
+                type="button"
+                id="btn-cancel-request"
+                onClick={() => {
+                  if (window.confirm('Tem certeza de que deseja cancelar esta solicitação de atendimento?')) {
+                    onUpdateStatus(request.id, 'cancelado');
+                  }
+                }}
+                className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 transition-colors cursor-pointer"
+              >
+                Cancelar esta solicitação
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -365,63 +407,6 @@ export const ActiveOrderTracking: React.FC<ActiveOrderTrackingProps> = ({
         </AnimatePresence>
       </div>
 
-      {/* SIMULADOR INTERATIVO DE FLUXO */}
-      <div className="bg-slate-900 text-slate-200 rounded-2xl p-3.5 border border-slate-800 space-y-2 text-xs">
-        <div className="flex items-center justify-between">
-          <span className="font-bold text-emerald-400 flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5" /> Controle de Status (Operador / Supabase)
-          </span>
-          <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-md">
-            Sincronizado
-          </span>
-        </div>
-        <p className="text-[11px] text-slate-400">
-          Alterne as etapas abaixo para testar a atualização do status persistida em tempo real:
-        </p>
-
-        <div className="grid grid-cols-2 gap-2 pt-1">
-          {request.status === 'aprovado' && (
-            <motion.button
-              whileTap={{ scale: 0.95 }}
-              onClick={() => onUpdateStatus(request.id, 'a_caminho')}
-              className="col-span-2 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-            >
-              <Car className="w-4 h-4" /> Deslocamento: Profissional a Caminho
-            </motion.button>
-          )}
-
-          {request.status === 'a_caminho' && (
-            <motion.button
-              whileTap={{ scale: 0.95 }}
-              onClick={() => onUpdateStatus(request.id, 'em_andamento')}
-              className="col-span-2 py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-            >
-              <ShieldCheck className="w-4 h-4" /> No Imóvel: Validar Código {request.securityCode}
-            </motion.button>
-          )}
-
-          {request.status === 'em_andamento' && (
-            <motion.button
-              whileTap={{ scale: 0.95 }}
-              onClick={() => onUpdateStatus(request.id, 'concluido')}
-              className="col-span-2 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-            >
-              <CheckCircle2 className="w-4 h-4" /> Finalizar: Concluir Serviço & Pagamento
-            </motion.button>
-          )}
-
-          {request.status === 'concluido' && (
-            <motion.button
-              whileTap={{ scale: 0.95 }}
-              onClick={() => onUpdateStatus(request.id, 'aprovado')}
-              className="col-span-2 py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-semibold flex items-center justify-center gap-1.5 border border-slate-700 cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" /> Reabrir Acompanhamento como Aprovado
-            </motion.button>
-          )}
-        </div>
-      </div>
-
       {/* AÇÕES FINAIS: Ver Comprovante & Novo Pedido */}
       <div className="flex items-center gap-2.5 pt-1">
         <motion.button
@@ -469,7 +454,7 @@ export const ActiveOrderTracking: React.FC<ActiveOrderTrackingProps> = ({
                 </p>
               </div>
 
-              {/* Simulação QR Code Vector Visual */}
+              {/* QR Code Vector Visual para Leitura Óptica */}
               <div className="bg-slate-900 p-5 rounded-2xl inline-block border-4 border-emerald-500 shadow-inner">
                 <div className="w-44 h-44 bg-white rounded-xl p-2 flex flex-col items-center justify-center relative overflow-hidden">
                   <QrCode className="w-36 h-36 text-slate-900" />

@@ -123,7 +123,7 @@ export default function App() {
     setRequests(updated);
     setSelectedRequest(newRequest);
     setCurrentTab('orders');
-    showToast(`Solicitação #${newRequest.id} aprovada! Código: ${newRequest.securityCode}`);
+    showToast(`Solicitação #${newRequest.id} registrada! Código: ${newRequest.securityCode}`);
   };
 
   const handleUpdateStatus = async (requestId: string, newStatus: ServiceStatus) => {
