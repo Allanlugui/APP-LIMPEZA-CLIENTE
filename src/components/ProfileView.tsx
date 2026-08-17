@@ -16,19 +16,24 @@ import {
   Camera,
   Upload,
   Trash2,
-  Image as ImageIcon
+  Image as ImageIcon,
+  KeyRound,
+  Copy,
+  Check,
+  LogOut
 } from 'lucide-react';
 import { CustomerProfile, DocumentType } from '../types';
 import { maskCPF, maskRG, maskPhone, maskCEP, unmaskDigits } from '../utils/masks';
 import { isValidCPF, isValidRG, isValidEmail, isValidPhone, isValidCEP } from '../utils/validators';
 import { fetchAddressByCep } from '../utils/viaCep';
-import { uploadFotoPerfilSupabase } from '../lib/supabase';
+import { uploadFotoPerfilSupabase, atualizarPerfilClienteSupabase } from '../lib/supabase';
 
 interface ProfileViewProps {
   profile: CustomerProfile;
   onSaveProfile: (profile: CustomerProfile) => void;
   isMandatoryRegistration?: boolean;
   onContinueAfterRegistration?: () => void;
+  onLogout?: () => void;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -36,6 +41,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onSaveProfile,
   isMandatoryRegistration = false,
   onContinueAfterRegistration,
+  onLogout,
 }) => {
   const [formData, setFormData] = useState<CustomerProfile>(profile);
   const [docType, setDocType] = useState<DocumentType>(profile.documentType || 'CPF');
@@ -43,6 +49,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [cepError, setCepError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [isCopiedCode, setIsCopiedCode] = useState(false);
 
   // Estados para foto de perfil e upload nativo
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -225,6 +232,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     };
 
     onSaveProfile(updatedProfile);
+    atualizarPerfilClienteSupabase(updatedProfile).then();
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3000);
 
@@ -233,10 +241,18 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
+  const copyRecoveryCode = () => {
+    if (formData.recoveryCode) {
+      navigator.clipboard.writeText(formData.recoveryCode);
+      setIsCopiedCode(true);
+      setTimeout(() => setIsCopiedCode(false), 3000);
+    }
+  };
+
   return (
-    <div className="content-bottom-clearance pt-2 px-4 max-w-md mx-auto select-none">
+    <div className="content-bottom-clearance pt-2 px-4 max-w-md mx-auto select-none space-y-4">
       {/* Registration Header Banner */}
-      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 text-white rounded-2xl p-5 mb-5 shadow-lg border border-slate-700">
+      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 text-white rounded-2xl p-5 shadow-lg border border-slate-700">
         <div className="flex items-start justify-between">
           <div className="space-y-1">
             <div className="inline-flex items-center gap-1.5 bg-emerald-500/20 text-emerald-300 text-xs font-semibold px-2.5 py-0.5 rounded-full border border-emerald-400/30">
@@ -255,6 +271,52 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* CÓDIGO ÚNICO DE RECUPERAÇÃO DO CLIENTE */}
+      {formData.recoveryCode && (
+        <div className="bg-slate-900 text-white rounded-2xl p-4 border border-slate-800 shadow-md space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-extrabold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+              <KeyRound className="w-3.5 h-3.5" /> Chave de Segurança
+            </span>
+            <span className="bg-slate-800 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-md">
+              6 Dígitos
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/80">
+            <div>
+              <p className="text-[11px] text-slate-400">Código Único de Recuperação:</p>
+              <p className="text-xl font-black font-mono tracking-widest text-emerald-400">
+                {formData.recoveryCode}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              id="btn-profile-copy-recovery-code"
+              onClick={copyRecoveryCode}
+              className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
+            >
+              {isCopiedCode ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  Copiado
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  Copiar
+                </>
+              )}
+            </button>
+          </div>
+
+          <p className="text-[10px] text-slate-400 leading-tight">
+            Guarde este código em local seguro. Ele permite redefinir sua senha a qualquer momento.
+          </p>
+        </div>
+      )}
 
       {saveSuccess && (
         <div className="mb-4 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl p-3.5 flex items-center gap-3 animate-fadeIn">
@@ -808,6 +870,25 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           <Save className="w-4 h-4" />
           {isMandatoryRegistration ? 'Confirmar Cadastro e Continuar' : 'Salvar Dados do Cadastro'}
         </button>
+
+        {/* Botão Sair da Conta */}
+        {onLogout && (
+          <div className="pt-2 border-t border-slate-200">
+            <button
+              type="button"
+              id="btn-profile-logout"
+              onClick={() => {
+                if (window.confirm('Deseja realmente sair da sua conta?')) {
+                  onLogout();
+                }
+              }}
+              className="w-full py-3 px-4 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors border border-slate-200 hover:border-rose-200 cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              Sair da Minha Conta / Trocar de Usuário
+            </button>
+          </div>
+        )}
       </form>
     </div>
   );

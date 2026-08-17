@@ -20,8 +20,16 @@ export interface CustomerProfile {
   phone: string;
   photoUrl?: string;
   address: Address;
+  recoveryCode?: string;
   createdAt: string;
   updatedAt?: string;
+}
+
+export interface AuthSession {
+  customer: CustomerProfile;
+  rememberMe: boolean;
+  token?: string;
+  lastLogin: string;
 }
 
 export type ServiceType = 'limpeza' | 'organizacao' | 'ambos';

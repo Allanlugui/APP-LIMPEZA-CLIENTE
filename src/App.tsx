@@ -4,7 +4,8 @@ import {
   CustomerProfile, 
   ServiceRequest, 
   AppTab, 
-  ServiceStatus 
+  ServiceStatus,
+  AuthSession
 } from './types';
 import { 
   getStoredProfile, 
@@ -12,7 +13,10 @@ import {
   getStoredRequests, 
   saveStoredRequests,
   addServiceRequest, 
-  updateServiceRequestStatus 
+  updateServiceRequestStatus,
+  getStoredAuthSession,
+  saveStoredAuthSession,
+  clearStoredAuthSession
 } from './utils/storage';
 import { 
   buscarSolicitacoesSupabase, 
@@ -29,9 +33,14 @@ import { OrdersListView } from './components/OrdersListView';
 import { ProfileView } from './components/ProfileView';
 import { OrderReceiptModal } from './components/OrderReceiptModal';
 import { PwaInstallBanner } from './components/PwaInstallBanner';
+import { AuthView } from './components/AuthView';
 
 export default function App() {
-  const [profile, setProfile] = useState<CustomerProfile>(() => getStoredProfile());
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => getStoredAuthSession());
+  const [profile, setProfile] = useState<CustomerProfile>(() => {
+    const session = getStoredAuthSession();
+    return session?.customer || getStoredProfile();
+  });
   const [requests, setRequests] = useState<ServiceRequest[]>(() => getStoredRequests());
   const [isLoadingRequests, setIsLoadingRequests] = useState<boolean>(true);
   const [currentTab, setCurrentTab] = useState<AppTab>('home');
@@ -41,6 +50,11 @@ export default function App() {
 
   // Sincronização em tempo real com Supabase (consultas reais)
   useEffect(() => {
+    if (!authSession) {
+      setIsLoadingRequests(false);
+      return;
+    }
+
     let isMounted = true;
 
     async function sincronizarSupabase() {
@@ -93,7 +107,29 @@ export default function App() {
       isMounted = false;
       unsubscribe();
     };
-  }, []);
+  }, [authSession]);
+
+  // Handler para quando o usuário se autentica com sucesso
+  const handleAuthenticated = (session: AuthSession) => {
+    setAuthSession(session);
+    setProfile(session.customer);
+    setCurrentTab('home');
+    showToast(`Bem-vindo(a), ${session.customer.fullName.split(' ')[0]}!`);
+  };
+
+  // Handler de Logout
+  const handleLogout = () => {
+    clearStoredAuthSession();
+    setAuthSession(null);
+    setSelectedRequest(null);
+    setCurrentTab('home');
+    showToast('Sessão encerrada com segurança.');
+  };
+
+  // Se não houver sessão ativa, renderiza a tela de login/cadastro
+  if (!authSession) {
+    return <AuthView onAuthenticated={handleAuthenticated} />;
+  }
 
   // Active requests (solicitado, aprovado, a_caminho, em_andamento)
   const activeRequests = requests.filter((r) =>
@@ -115,6 +151,14 @@ export default function App() {
   const handleSaveProfile = (updated: CustomerProfile) => {
     setProfile(updated);
     saveStoredProfile(updated);
+    if (authSession) {
+      const updatedSession: AuthSession = {
+        ...authSession,
+        customer: updated,
+      };
+      saveStoredAuthSession(updatedSession);
+      setAuthSession(updatedSession);
+    }
     showToast('Dados cadastrais salvos com sucesso!');
   };
 
@@ -284,6 +328,7 @@ export default function App() {
                 <ProfileView
                   profile={profile}
                   onSaveProfile={handleSaveProfile}
+                  onLogout={handleLogout}
                 />
               </motion.div>
             )}

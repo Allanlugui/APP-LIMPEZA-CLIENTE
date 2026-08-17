@@ -274,6 +274,561 @@ export async function cancelarSolicitacaoSupabase(
 }
 
 /**
+ * =========================================================================
+ * MÓDULO DE AUTENTICAÇÃO E CADASTRO DO CLIENTE (SUPABASE)
+ * =========================================================================
+ */
+
+/**
+ * Extrai o nome da coluna não encontrada a partir da mensagem de erro PGRST204 do Supabase / PostgREST
+ */
+function extrairColunaInexistente(errorObj: any): string | null {
+  if (!errorObj) return null;
+  const message = errorObj.message || errorObj.details || '';
+  const match = message.match(/Could not find the ['"]([^'"]+)['"] column/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Mapeia os dados do cliente da tabela `clientes` do Supabase para `CustomerProfile`
+ * com suporte resiliente a múltiplos esquemas e metadados no JSONB de endereço.
+ */
+export function mapearClienteDeSupabase(row: any): CustomerProfile {
+  if (!row) {
+    return {
+      id: `cust_${Date.now().toString(36)}`,
+      fullName: '',
+      documentType: 'CPF',
+      documentNumber: '',
+      email: '',
+      phone: '',
+      photoUrl: '',
+      recoveryCode: '',
+      address: {
+        cep: '',
+        logradouro: '',
+        numero: '',
+        bairro: '',
+        cidade: '',
+        uf: '',
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  // Extrai endereço e metadados de contingência caso a coluna isolada não exista no banco
+  const rawEndereco = typeof row.endereco === 'object' && row.endereco !== null 
+    ? row.endereco 
+    : (typeof row.address === 'object' && row.address !== null ? row.address : {});
+
+  const recoveryCode = 
+    row.codigo_recuperacao || 
+    row.recovery_code || 
+    rawEndereco.codigo_recuperacao || 
+    rawEndereco.recoveryCode || 
+    rawEndereco.recovery_code || 
+    '';
+
+  const cleanEndereco = {
+    cep: rawEndereco.cep || '',
+    logradouro: rawEndereco.logradouro || rawEndereco.rua || '',
+    numero: rawEndereco.numero || '',
+    complemento: rawEndereco.complemento || '',
+    bairro: rawEndereco.bairro || '',
+    cidade: rawEndereco.cidade || rawEndereco.localidade || '',
+    uf: rawEndereco.uf || rawEndereco.estado || '',
+  };
+
+  return {
+    id: String(row.id || ''),
+    fullName: row.nome_completo || row.full_name || row.nome || row.name || '',
+    documentType: (row.tipo_documento || row.document_type || 'CPF') as 'CPF' | 'RG',
+    documentNumber: row.numero_documento || row.document_number || row.cpf || rawEndereco.cpf || '',
+    email: row.email || rawEndereco.email || '',
+    phone: row.telefone || row.phone || rawEndereco.telefone || '',
+    photoUrl: row.foto_url || row.photo_url || row.avatar_url || '',
+    recoveryCode: String(recoveryCode || ''),
+    address: cleanEndereco,
+    createdAt: row.created_at || new Date().toISOString(),
+    updatedAt: row.updated_at || undefined,
+  };
+}
+
+/**
+ * Cadastra um novo cliente na tabela `clientes` do Supabase com tratamento adaptativo
+ * de esquema para tabelas existentes que ainda não possuam colunas específicas como `codigo_recuperacao`.
+ */
+export async function cadastrarClienteSupabase(
+  profile: CustomerProfile,
+  passwordHash: string,
+  recoveryCode: string
+): Promise<{ success: boolean; profile?: CustomerProfile; error?: string }> {
+  try {
+    const cleanDoc = profile.documentNumber.replace(/\D/g, '') || profile.documentNumber.trim();
+    const cleanEmail = profile.email.trim().toLowerCase();
+
+    if (isSupabaseConfigured && supabase) {
+      // 1. Verifica se já existe cliente com o mesmo CPF/documento ou E-mail
+      try {
+        const { data: existing, error: checkError } = await supabase
+          .from('clientes')
+          .select('id, email, numero_documento')
+          .or(`numero_documento.eq.${cleanDoc},email.eq.${cleanEmail}`)
+          .maybeSingle();
+
+        if (!checkError && existing) {
+          return {
+            success: false,
+            error: 'Já existe uma conta cadastrada com este CPF ou E-mail. Tente fazer login ou recuperar o acesso.',
+          };
+        }
+      } catch (checkErr) {
+        console.warn('Checagem de duplicidade no Supabase:', checkErr);
+      }
+
+      // 2. Prepara o payload incluindo os metadados de segurança no JSONB endereco
+      // para garantir persistência mesmo se o schema PostgreSQL não tiver as colunas dedicadas
+      const enderecoComMetadados = {
+        ...profile.address,
+        codigo_recuperacao: recoveryCode,
+        recoveryCode: recoveryCode,
+        senha_hash: passwordHash,
+        documentNumber: cleanDoc,
+        email: cleanEmail,
+      };
+
+      const payload: Record<string, any> = {
+        id: profile.id,
+        nome_completo: profile.fullName.trim(),
+        tipo_documento: profile.documentType,
+        numero_documento: cleanDoc,
+        email: cleanEmail,
+        telefone: profile.phone.trim(),
+        foto_url: profile.photoUrl || null,
+        endereco: enderecoComMetadados,
+        senha_hash: passwordHash,
+        codigo_recuperacao: recoveryCode,
+        ultimo_acesso: new Date().toISOString(),
+        created_at: profile.createdAt || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      // 3. Inserção com tolerância e adaptação automática de esquema (PGRST204)
+      let insertedData: any = null;
+      let lastError: any = null;
+
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const { data: inserted, error: insertError } = await supabase
+          .from('clientes')
+          .insert(payload)
+          .select()
+          .single();
+
+        if (!insertError && inserted) {
+          insertedData = inserted;
+          lastError = null;
+          break;
+        }
+
+        lastError = insertError;
+        if (insertError?.code === 'PGRST204' || insertError?.message?.includes('Could not find')) {
+          const missingCol = extrairColunaInexistente(insertError);
+          if (missingCol && missingCol in payload) {
+            console.warn(`[Supabase Schema Adaptive] Removendo coluna '${missingCol}' ausente no schema e tentando novamente...`);
+            delete payload[missingCol];
+            continue;
+          }
+
+          // Se não identificou o nome exato, remove em ordem de compatibilidade
+          if ('codigo_recuperacao' in payload) {
+            delete payload.codigo_recuperacao;
+            continue;
+          }
+          if ('senha_hash' in payload) {
+            delete payload.senha_hash;
+            continue;
+          }
+          if ('ultimo_acesso' in payload) {
+            delete payload.ultimo_acesso;
+            continue;
+          }
+          if ('tipo_documento' in payload) {
+            delete payload.tipo_documento;
+            continue;
+          }
+          if ('foto_url' in payload) {
+            delete payload.foto_url;
+            continue;
+          }
+        }
+
+        // Se for outro tipo de erro (ex: duplicidade já cadastrada), interrompe
+        if (insertError?.code === '23505') {
+          return {
+            success: false,
+            error: 'Este CPF ou E-mail já está cadastrado no sistema. Faça o login ou use a Recuperação de Acesso.',
+          };
+        }
+
+        break;
+      }
+
+      if (lastError && !insertedData) {
+        console.error('Erro ao inserir cliente no Supabase após tentativas adaptativas:', lastError);
+        return {
+          success: false,
+          error: lastError.message || 'Falha ao registrar cliente no banco de dados.',
+        };
+      }
+
+      return {
+        success: true,
+        profile: {
+          ...mapearClienteDeSupabase(insertedData || payload),
+          recoveryCode,
+        },
+      };
+    }
+
+    // Fallback local caso Supabase não esteja configurado
+    return {
+      success: true,
+      profile: {
+        ...profile,
+        recoveryCode,
+      },
+    };
+  } catch (err: any) {
+    console.error('Erro inesperado no cadastro do cliente:', err);
+    return {
+      success: false,
+      error: err?.message || 'Erro inesperado ao realizar cadastro.',
+    };
+  }
+}
+
+/**
+ * Autentica o cliente consultando a tabela `clientes` no Supabase por CPF ou E-mail e Senha Hash
+ */
+export async function autenticarClienteSupabase(
+  identifier: string,
+  passwordHash: string
+): Promise<{ success: boolean; profile?: CustomerProfile; error?: string }> {
+  try {
+    const trimmed = identifier.trim();
+    const cleanDoc = trimmed.replace(/\D/g, '');
+    const cleanEmail = trimmed.toLowerCase();
+
+    if (isSupabaseConfigured && supabase) {
+      let cliente: any = null;
+
+      // Tentativa 1: busca direta por email ou numero_documento
+      try {
+        let query = supabase.from('clientes').select('*');
+        if (trimmed.includes('@')) {
+          query = query.eq('email', cleanEmail);
+        } else if (cleanDoc.length > 0) {
+          query = query.or(`numero_documento.eq.${cleanDoc},numero_documento.eq.${trimmed}`);
+        } else {
+          query = query.eq('email', cleanEmail);
+        }
+
+        const { data, error } = await query.maybeSingle();
+        if (!error && data) {
+          cliente = data;
+        }
+      } catch (qErr) {
+        console.warn('Erro ao consultar por filtro específico:', qErr);
+      }
+
+      // Tentativa 2: fallback de busca ampla se query falhar por incompatibilidade de coluna
+      if (!cliente) {
+        try {
+          const { data: allClientes } = await supabase.from('clientes').select('*').limit(100);
+          if (allClientes && Array.isArray(allClientes)) {
+            cliente = allClientes.find((c: any) => {
+              const cDoc = String(c.numero_documento || c.document_number || c.cpf || c.endereco?.cpf || c.endereco?.documentNumber || '').replace(/\D/g, '');
+              const cEmail = String(c.email || c.endereco?.email || '').toLowerCase();
+              return cEmail === cleanEmail || (cleanDoc.length > 0 && cDoc === cleanDoc) || c.numero_documento === trimmed;
+            });
+          }
+        } catch (fbErr) {
+          console.warn('Erro no fallback de clientes:', fbErr);
+        }
+      }
+
+      if (!cliente) {
+        return {
+          success: false,
+          error: 'Nenhuma conta encontrada com este CPF ou E-mail. Verifique os dados ou realize o Primeiro Acesso.',
+        };
+      }
+
+      // Validação resiliente do hash da senha (coluna dedicada ou metadados no endereço)
+      const storedHash = 
+        cliente.senha_hash || 
+        cliente.password_hash || 
+        cliente.endereco?.senha_hash || 
+        cliente.endereco?.password_hash;
+
+      if (storedHash && storedHash !== passwordHash) {
+        return {
+          success: false,
+          error: 'Senha incorreta. Verifique a senha digitada ou utilize a Recuperação de Acesso.',
+        };
+      }
+
+      // Atualiza data do último acesso no Supabase em background de forma segura
+      try {
+        supabase
+          .from('clientes')
+          .update({ ultimo_acesso: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('id', cliente.id)
+          .then();
+      } catch {
+        // Silencioso se a coluna não existir
+      }
+
+      return {
+        success: true,
+        profile: mapearClienteDeSupabase(cliente),
+      };
+    }
+
+    return {
+      success: false,
+      error: 'Serviço de autenticação não configurado no momento.',
+    };
+  } catch (err: any) {
+    console.error('Erro na autenticação do cliente:', err);
+    return {
+      success: false,
+      error: err?.message || 'Erro inesperado durante a autenticação.',
+    };
+  }
+}
+
+/**
+ * Recupera o acesso e redefine a senha do cliente usando o Código Único de 6 Dígitos
+ */
+export async function recuperarSenhaClienteSupabase(
+  identifier: string,
+  recoveryCode: string,
+  newPasswordHash: string
+): Promise<{ success: boolean; profile?: CustomerProfile; error?: string }> {
+  try {
+    const trimmed = identifier.trim();
+    const cleanDoc = trimmed.replace(/\D/g, '');
+    const cleanEmail = trimmed.toLowerCase();
+    const cleanCode = recoveryCode.trim().replace(/\D/g, '');
+
+    if (!cleanCode || cleanCode.length !== 6) {
+      return {
+        success: false,
+        error: 'O código único de recuperação deve conter exatamente 6 dígitos numéricos.',
+      };
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      let cliente: any = null;
+
+      try {
+        let query = supabase.from('clientes').select('*');
+        if (trimmed.includes('@')) {
+          query = query.eq('email', cleanEmail);
+        } else if (cleanDoc.length > 0) {
+          query = query.or(`numero_documento.eq.${cleanDoc},numero_documento.eq.${trimmed}`);
+        } else {
+          query = query.eq('email', cleanEmail);
+        }
+
+        const { data, error: findError } = await query.maybeSingle();
+        if (!findError && data) {
+          cliente = data;
+        }
+      } catch (findErr) {
+        console.warn('Erro ao buscar cliente para recuperação:', findErr);
+      }
+
+      // Fallback de busca
+      if (!cliente) {
+        const { data: allClientes } = await supabase.from('clientes').select('*').limit(100);
+        if (allClientes && Array.isArray(allClientes)) {
+          cliente = allClientes.find((c: any) => {
+            const cDoc = String(c.numero_documento || c.document_number || c.cpf || c.endereco?.cpf || '').replace(/\D/g, '');
+            const cEmail = String(c.email || c.endereco?.email || '').toLowerCase();
+            return cEmail === cleanEmail || (cleanDoc.length > 0 && cDoc === cleanDoc);
+          });
+        }
+      }
+
+      if (!cliente) {
+        return {
+          success: false,
+          error: 'Cliente não encontrado com o CPF ou E-mail informado.',
+        };
+      }
+
+      // Validação do Código de Recuperação em múltiplas fontes
+      const rawEndereco = typeof cliente.endereco === 'object' && cliente.endereco !== null ? cliente.endereco : {};
+      const codigoSalvo = String(
+        cliente.codigo_recuperacao || 
+        cliente.recovery_code || 
+        rawEndereco.codigo_recuperacao || 
+        rawEndereco.recoveryCode || 
+        ''
+      ).trim();
+
+      if (codigoSalvo && codigoSalvo !== cleanCode) {
+        return {
+          success: false,
+          error: 'Código único de recuperação inválido para esta conta. Verifique os 6 dígitos fornecidos no cadastro.',
+        };
+      }
+
+      // Prepara o novo endereço com o hash e código atualizados
+      const updatedEndereco = {
+        ...rawEndereco,
+        senha_hash: newPasswordHash,
+        codigo_recuperacao: cleanCode,
+        recoveryCode: cleanCode,
+      };
+
+      const updatePayload: Record<string, any> = {
+        senha_hash: newPasswordHash,
+        endereco: updatedEndereco,
+        updated_at: new Date().toISOString(),
+      };
+
+      let updatedRecord: any = null;
+      let lastUpdateError: any = null;
+
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const { data: updated, error: updateError } = await supabase
+          .from('clientes')
+          .update(updatePayload)
+          .eq('id', cliente.id)
+          .select()
+          .single();
+
+        if (!updateError && updated) {
+          updatedRecord = updated;
+          lastUpdateError = null;
+          break;
+        }
+
+        lastUpdateError = updateError;
+        if (updateError?.code === 'PGRST204' || updateError?.message?.includes('Could not find')) {
+          const missingCol = extrairColunaInexistente(updateError);
+          if (missingCol && missingCol in updatePayload) {
+            delete updatePayload[missingCol];
+            continue;
+          }
+          if ('senha_hash' in updatePayload) {
+            delete updatePayload.senha_hash;
+            continue;
+          }
+        }
+        break;
+      }
+
+      if (lastUpdateError && !updatedRecord) {
+        return {
+          success: false,
+          error: 'Não foi possível atualizar a senha no banco de dados: ' + lastUpdateError.message,
+        };
+      }
+
+      return {
+        success: true,
+        profile: mapearClienteDeSupabase(updatedRecord || { ...cliente, endereco: updatedEndereco }),
+      };
+    }
+
+    return {
+      success: false,
+      error: 'Serviço de banco de dados offline.',
+    };
+  } catch (err: any) {
+    console.error('Erro na recuperação de senha:', err);
+    return {
+      success: false,
+      error: err?.message || 'Erro inesperado na recuperação de acesso.',
+    };
+  }
+}
+
+/**
+ * Atualiza os dados cadastrais do cliente no Supabase com tolerância a esquemas
+ */
+export async function atualizarPerfilClienteSupabase(
+  profile: CustomerProfile
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!isSupabaseConfigured || !supabase) {
+      return { success: true };
+    }
+
+    const payload: Record<string, any> = {
+      nome_completo: profile.fullName.trim(),
+      tipo_documento: profile.documentType,
+      numero_documento: profile.documentNumber.replace(/\D/g, '') || profile.documentNumber,
+      email: profile.email.trim().toLowerCase(),
+      telefone: profile.phone.trim(),
+      foto_url: profile.photoUrl || null,
+      endereco: {
+        ...profile.address,
+        codigo_recuperacao: profile.recoveryCode,
+        recoveryCode: profile.recoveryCode,
+      },
+      updated_at: new Date().toISOString(),
+    };
+
+    if (profile.recoveryCode) {
+      payload.codigo_recuperacao = profile.recoveryCode;
+    }
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { error } = await supabase
+        .from('clientes')
+        .update(payload)
+        .eq('id', profile.id);
+
+      if (!error) {
+        return { success: true };
+      }
+
+      if (error?.code === 'PGRST204' || error?.message?.includes('Could not find')) {
+        const missingCol = extrairColunaInexistente(error);
+        if (missingCol && missingCol in payload) {
+          delete payload[missingCol];
+          continue;
+        }
+        if ('codigo_recuperacao' in payload) {
+          delete payload.codigo_recuperacao;
+          continue;
+        }
+        if ('tipo_documento' in payload) {
+          delete payload.tipo_documento;
+          continue;
+        }
+        if ('foto_url' in payload) {
+          delete payload.foto_url;
+          continue;
+        }
+      }
+
+      console.warn('Erro ao atualizar perfil no Supabase:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+/**
  * Script SQL Oficial do Supabase para criação das tabelas, índices,
  * realtime publication e políticas RLS de segurança para o Sistema e App Operacional.
  */
@@ -282,7 +837,49 @@ export const SUPABASE_DATABASE_SCHEMA_SQL = `
 -- ESQUEMA OFICIAL DE PRODUÇÃO SUPABASE: SISTEMA + APP CLIENTE + APP OPERACIONAL
 -- =========================================================================
 
--- 1. Criação da tabela de Solicitações de Serviço
+-- 1. TABELA DE CLIENTES (Autenticação, Recuperação de 6 Dígitos e Perfil)
+CREATE TABLE IF NOT EXISTS public.clientes (
+  id TEXT PRIMARY KEY,
+  nome_completo TEXT NOT NULL,
+  tipo_documento VARCHAR(10) NOT NULL DEFAULT 'CPF',
+  numero_documento TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL UNIQUE,
+  telefone TEXT NOT NULL,
+  foto_url TEXT,
+  endereco JSONB NOT NULL DEFAULT '{}'::jsonb,
+  senha_hash TEXT NOT NULL,
+  codigo_recuperacao VARCHAR(6) NOT NULL,
+  ultimo_acesso TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Atualizações de Compatibilidade e Migração Idempotente para tabelas existentes
+ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS codigo_recuperacao VARCHAR(6);
+ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS senha_hash TEXT;
+ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS tipo_documento VARCHAR(10) DEFAULT 'CPF';
+ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS ultimo_acesso TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Índices de Alta Velocidade para Busca de Login e Segurança
+CREATE INDEX IF NOT EXISTS idx_clientes_documento ON public.clientes(numero_documento);
+CREATE INDEX IF NOT EXISTS idx_clientes_email ON public.clientes(email);
+CREATE INDEX IF NOT EXISTS idx_clientes_codigo_recuperacao ON public.clientes(codigo_recuperacao);
+
+-- RLS para a Tabela Clientes
+ALTER TABLE public.clientes ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Permitir leitura de clientes" 
+  ON public.clientes FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "Permitir cadastro de novos clientes" 
+  ON public.clientes FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+CREATE POLICY "Permitir atualizacao de clientes" 
+  ON public.clientes FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+
+
+-- 2. TABELA DE SOLICITAÇÕES DE SERVIÇO
 CREATE TABLE IF NOT EXISTS public.solicitacoes_servico (
   id TEXT PRIMARY KEY,
   codigo_ordem TEXT NOT NULL,
@@ -329,40 +926,29 @@ CREATE TABLE IF NOT EXISTS public.solicitacoes_servico (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 2. Índices de alta performance para busca e filtros de status
+-- Índices para Solicitações
 CREATE INDEX IF NOT EXISTS idx_solicitacoes_customer_id ON public.solicitacoes_servico(customer_id);
 CREATE INDEX IF NOT EXISTS idx_solicitacoes_status ON public.solicitacoes_servico(status);
 CREATE INDEX IF NOT EXISTS idx_solicitacoes_created_at ON public.solicitacoes_servico(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_solicitacoes_scheduled_date ON public.solicitacoes_servico(scheduled_date);
 
--- 3. Habilitação de Row Level Security (RLS) - Regra Rígida de Segurança
+-- RLS para Solicitações
 ALTER TABLE public.solicitacoes_servico ENABLE ROW LEVEL SECURITY;
 
--- Política de leitura e gravação para a aplicação cliente e operacional
 CREATE POLICY "Permitir leitura de solicitacoes" 
-  ON public.solicitacoes_servico 
-  FOR SELECT 
-  TO anon, authenticated 
-  USING (true);
+  ON public.solicitacoes_servico FOR SELECT TO anon, authenticated USING (true);
 
 CREATE POLICY "Permitir criacao de solicitacoes" 
-  ON public.solicitacoes_servico 
-  FOR INSERT 
-  TO anon, authenticated 
-  WITH CHECK (true);
+  ON public.solicitacoes_servico FOR INSERT TO anon, authenticated WITH CHECK (true);
 
 CREATE POLICY "Permitir atualizacao operacional de solicitacoes" 
-  ON public.solicitacoes_servico 
-  FOR UPDATE 
-  TO anon, authenticated 
-  USING (true)
-  WITH CHECK (true);
+  ON public.solicitacoes_servico FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 4. Habilitação do Supabase Realtime para a tabela solicitacoes_servico
+-- 3. Habilitação do Supabase Realtime
 ALTER PUBLICATION supabase_realtime ADD TABLE public.solicitacoes_servico;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.clientes;
 
--- 5. Bucket do Supabase Storage para Avatares / Fotos de Perfil
--- Execute no SQL Editor do Supabase se o bucket não existir:
+-- 4. Bucket do Supabase Storage para Avatares / Fotos de Perfil
 INSERT INTO storage.buckets (id, name, public) 
 VALUES ('avatars', 'avatars', true)
 ON CONFLICT (id) DO NOTHING;
