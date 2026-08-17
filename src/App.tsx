@@ -48,6 +48,29 @@ export default function App() {
   const [receiptRequest, setReceiptRequest] = useState<ServiceRequest | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Helper de Toast global com escopo seguro
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  // Handler para quando o usuário se autentica com sucesso
+  const handleAuthenticated = (session: AuthSession) => {
+    setAuthSession(session);
+    setProfile(session.customer);
+    setCurrentTab('home');
+    showToast(`Bem-vindo(a), ${session.customer.fullName.split(' ')[0]}!`);
+  };
+
+  // Handler de Logout
+  const handleLogout = () => {
+    clearStoredAuthSession();
+    setAuthSession(null);
+    setSelectedRequest(null);
+    setCurrentTab('home');
+    showToast('Sessão encerrada com segurança.');
+  };
+
   // Sincronização em tempo real com Supabase (consultas reais)
   useEffect(() => {
     if (!authSession) {
@@ -109,45 +132,6 @@ export default function App() {
     };
   }, [authSession]);
 
-  // Handler para quando o usuário se autentica com sucesso
-  const handleAuthenticated = (session: AuthSession) => {
-    setAuthSession(session);
-    setProfile(session.customer);
-    setCurrentTab('home');
-    showToast(`Bem-vindo(a), ${session.customer.fullName.split(' ')[0]}!`);
-  };
-
-  // Handler de Logout
-  const handleLogout = () => {
-    clearStoredAuthSession();
-    setAuthSession(null);
-    setSelectedRequest(null);
-    setCurrentTab('home');
-    showToast('Sessão encerrada com segurança.');
-  };
-
-  // Se não houver sessão ativa, renderiza a tela de login/cadastro
-  if (!authSession) {
-    return <AuthView onAuthenticated={handleAuthenticated} />;
-  }
-
-  // Active requests (solicitado, aprovado, a_caminho, em_andamento)
-  const activeRequests = requests.filter((r) =>
-    ['solicitado', 'aprovado', 'a_caminho', 'em_andamento'].includes(r.status)
-  );
-  const primaryActiveRequest = activeRequests[0];
-
-  const isProfileIncomplete =
-    !profile.fullName?.trim() ||
-    !profile.documentNumber?.trim() ||
-    !profile.phone?.trim() ||
-    !profile.address?.logradouro?.trim();
-
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
-  };
-
   const handleSaveProfile = (updated: CustomerProfile) => {
     setProfile(updated);
     saveStoredProfile(updated);
@@ -188,6 +172,46 @@ export default function App() {
     setSelectedRequest(req);
     setCurrentTab('orders');
   };
+
+  // Se não houver sessão ativa, renderiza a tela de login/cadastro
+  if (!authSession) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex justify-center text-slate-900 font-sans">
+        {/* Floating Toast Notification */}
+        <AnimatePresence>
+          {toastMessage && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              className="fixed top-6 inset-x-4 z-50 max-w-sm mx-auto bg-slate-900 text-emerald-400 text-xs font-bold px-4 py-3 rounded-2xl shadow-xl border border-emerald-500/50 flex items-center justify-between"
+            >
+              <span>{toastMessage}</span>
+              <button
+                onClick={() => setToastMessage(null)}
+                className="text-slate-400 hover:text-white text-sm ml-2 font-mono p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <AuthView onAuthenticated={handleAuthenticated} />
+      </div>
+    );
+  }
+
+  // Active requests (solicitado, aprovado, a_caminho, em_andamento)
+  const activeRequests = requests.filter((r) =>
+    ['solicitado', 'aprovado', 'a_caminho', 'em_andamento'].includes(r.status)
+  );
+  const primaryActiveRequest = activeRequests[0];
+
+  const isProfileIncomplete =
+    !profile.fullName?.trim() ||
+    !profile.documentNumber?.trim() ||
+    !profile.phone?.trim() ||
+    !profile.address?.logradouro?.trim();
 
   return (
     <div className="min-h-screen bg-slate-100 flex justify-center text-slate-900 font-sans selection:bg-emerald-500 selection:text-white">

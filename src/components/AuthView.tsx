@@ -30,6 +30,7 @@ import {
   autenticarClienteSupabase, 
   cadastrarClienteSupabase, 
   recuperarSenhaClienteSupabase,
+  gerarUUIDValido,
   isSupabaseConfigured
 } from '../lib/supabase';
 import { 
@@ -264,7 +265,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
     try {
       const passHash = await hashPassword(regPassword);
       const recoveryCode = generate6DigitRecoveryCode();
-      const customerId = `cust_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+      const customerId = gerarUUIDValido();
 
       const newProfile: CustomerProfile = {
         id: customerId,
