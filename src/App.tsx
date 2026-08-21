@@ -24,6 +24,8 @@ import {
   atualizarStatusSolicitacaoSupabase, 
   atualizarPerfilClienteSupabase,
   inscreverAtualizacoesTempoReal, 
+  inscreverNotificacoesEcossistema,
+  EcosystemNotification,
   isSupabaseConfigured 
 } from './lib/supabase';
 import { Header } from './components/Header';
@@ -36,6 +38,7 @@ import { ProfileView } from './components/ProfileView';
 import { OrderReceiptModal } from './components/OrderReceiptModal';
 import { PwaInstallBanner } from './components/PwaInstallBanner';
 import { AuthView } from './components/AuthView';
+import { Radio, BellRing, Activity, Sparkles } from 'lucide-react';
 
 export default function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(() => getStoredAuthSession());
@@ -49,6 +52,7 @@ export default function App() {
   const [selectedRequest, setSelectedRequest] = useState<ServiceRequest | null>(null);
   const [receiptRequest, setReceiptRequest] = useState<ServiceRequest | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [ecosystemAlert, setEcosystemAlert] = useState<EcosystemNotification | null>(null);
 
   // Helper de Toast global com escopo seguro
   const showToast = (msg: string) => {
@@ -113,8 +117,8 @@ export default function App() {
 
     sincronizarSupabase();
 
-    // Inscrição em tempo real via Postgres Changes
-    const unsubscribe = inscreverAtualizacoesTempoReal((updated) => {
+    // Inscrição em tempo real via Postgres Changes (tabela solicitacoes_servico)
+    const unsubscribeDb = inscreverAtualizacoesTempoReal((updated) => {
       setRequests((prev) => {
         const index = prev.findIndex((r) => r.id === updated.id);
         let novoArray: ServiceRequest[];
@@ -132,9 +136,35 @@ export default function App() {
       showToast(`Status atualizado em tempo real: #${updated.id} (${updated.status})`);
     });
 
+    // Inscrição em transmissões ao vivo do Ecossistema (Painel Admin & App de Campo)
+    const unsubscribeBroadcast = inscreverNotificacoesEcossistema((notif) => {
+      console.info('[App Ecossistema] Notificação ao vivo recebida:', notif);
+      setEcosystemAlert(notif);
+      
+      // Auto-remover após 7 segundos
+      setTimeout(() => {
+        setEcosystemAlert((current) => (current?.id === notif.id ? null : current));
+      }, 7000);
+
+      // Se for atualização de solicitação, sincroniza dados
+      if (notif.orderId || notif.type === 'status_update' || notif.type === 'new_order') {
+        buscarSolicitacoesSupabase(
+          authSession?.customer?.id,
+          authSession?.customer?.documentNumber,
+          authSession?.customer?.email
+        ).then((dadosAtualizados) => {
+          if (dadosAtualizados && dadosAtualizados.length > 0) {
+            setRequests(dadosAtualizados);
+            saveStoredRequests(dadosAtualizados);
+          }
+        }).catch((err) => console.warn('[App Ecossistema] Erro ao sincronizar pedidos após broadcast:', err));
+      }
+    });
+
     return () => {
       isMounted = false;
-      unsubscribe();
+      unsubscribeDb();
+      unsubscribeBroadcast();
     };
   }, [authSession]);
 
@@ -259,6 +289,48 @@ export default function App() {
               >
                 ✕
               </button>
+            </motion.div>
+          )}
+
+          {/* Live Ecosystem Broadcast Alert (Painel Admin & App de Campo) */}
+          {ecosystemAlert && (
+            <motion.div
+              key={ecosystemAlert.id}
+              initial={{ opacity: 0, y: -20, scale: 0.92 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -20, scale: 0.92 }}
+              className="fixed top-20 inset-x-4 z-50 max-w-sm mx-auto bg-slate-900/95 backdrop-blur-md text-white text-xs rounded-2xl shadow-2xl border border-emerald-500/60 p-3.5 flex flex-col gap-1.5"
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5">
+                <div className="flex items-center gap-1.5 font-bold text-slate-100">
+                  <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                  <span>{ecosystemAlert.title || 'Alerta do Ecossistema'}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                    ecosystemAlert.sender === 'admin_panel'
+                      ? 'bg-purple-950 text-purple-300 border border-purple-800/50'
+                      : ecosystemAlert.sender === 'field_app'
+                      ? 'bg-blue-950 text-blue-300 border border-blue-800/50'
+                      : 'bg-emerald-950 text-emerald-300 border border-emerald-800/50'
+                  }`}>
+                    {ecosystemAlert.sender === 'admin_panel'
+                      ? 'Painel Admin'
+                      : ecosystemAlert.sender === 'field_app'
+                      ? 'App de Campo'
+                      : 'Ecossistema'}
+                  </span>
+                  <button
+                    onClick={() => setEcosystemAlert(null)}
+                    className="text-slate-400 hover:text-white text-sm font-mono cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+              <p className="text-slate-300 text-[11px] leading-relaxed">
+                {ecosystemAlert.message}
+              </p>
             </motion.div>
           )}
         </AnimatePresence>

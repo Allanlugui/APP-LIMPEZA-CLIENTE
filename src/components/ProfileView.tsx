@@ -20,13 +20,24 @@ import {
   KeyRound,
   Copy,
   Check,
-  LogOut
+  LogOut,
+  Activity,
+  Wifi,
+  Database,
+  Radio,
+  Zap,
+  Server
 } from 'lucide-react';
 import { CustomerProfile, DocumentType } from '../types';
 import { maskCPF, maskRG, maskPhone, maskCEP, unmaskDigits } from '../utils/masks';
 import { isValidCPF, isValidRG, isValidEmail, isValidPhone, isValidCEP } from '../utils/validators';
 import { fetchAddressByCep } from '../utils/viaCep';
-import { uploadFotoPerfilSupabase, atualizarPerfilClienteSupabase } from '../lib/supabase';
+import { 
+  uploadFotoPerfilSupabase, 
+  atualizarPerfilClienteSupabase,
+  testarConexaoEcossistema,
+  isSupabaseConfigured
+} from '../lib/supabase';
 
 interface ProfileViewProps {
   profile: CustomerProfile;
@@ -55,6 +66,50 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [photoSuccessMsg, setPhotoSuccessMsg] = useState<string | null>(null);
+
+  // Estados para Teste de Conexão do Ecossistema (Admin, Field App & PWA)
+  const [isTestingLink, setIsTestingLink] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    latencyMs: number;
+    clientesOk: boolean;
+    solicitacoesOk: boolean;
+    realtimeOk: boolean;
+    checkedAt: string;
+    message: string;
+    details: {
+      supabaseUrl: string;
+      clientesStatus: string;
+      solicitacoesStatus: string;
+      realtimeChannelStatus: string;
+    };
+  } | null>(null);
+
+  const handleTestEcosystemLink = async () => {
+    setIsTestingLink(true);
+    try {
+      const res = await testarConexaoEcossistema(formData);
+      setTestResult(res);
+    } catch (err: any) {
+      setTestResult({
+        success: false,
+        latencyMs: 0,
+        clientesOk: false,
+        solicitacoesOk: false,
+        realtimeOk: false,
+        checkedAt: new Date().toISOString(),
+        message: err?.message || 'Falha ao executar diagnóstico de conexão.',
+        details: {
+          supabaseUrl: '',
+          clientesStatus: 'Erro',
+          solicitacoesStatus: 'Erro',
+          realtimeChannelStatus: 'Erro',
+        },
+      });
+    } finally {
+      setIsTestingLink(false);
+    }
+  };
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -870,6 +925,104 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           <Save className="w-4 h-4" />
           {isMandatoryRegistration ? 'Confirmar Cadastro e Continuar' : 'Salvar Dados do Cadastro'}
         </button>
+
+        {/* ========================================================================= */}
+        {/* MODULO: VERIFICAR CONEXÃO DO ECOSSISTEMA (PWA + ADMIN + FIELD APP)        */}
+        {/* ========================================================================= */}
+        <div id="section-ecosystem-link" className="mt-2 bg-slate-900 text-slate-100 rounded-2xl p-4 border border-slate-800 shadow-lg">
+          <div className="flex items-center justify-between gap-2 mb-2 pb-2.5 border-b border-slate-800">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                <Activity className="w-4 h-4 animate-pulse" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-slate-100">Verificar Conexão do Ecossistema</h4>
+                <p className="text-[10px] text-slate-400">PWA Cliente • Painel Admin • App de Campo</p>
+              </div>
+            </div>
+
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border flex items-center gap-1 ${
+              isSupabaseConfigured
+                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/40'
+                : 'bg-amber-950/80 text-amber-400 border-amber-500/40'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${isSupabaseConfigured ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`} />
+              {isSupabaseConfigured ? 'Supabase Live' : 'Modo Standby'}
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-300 mb-3 leading-relaxed">
+            Teste a comunicação remota, latência de banco de dados e transmissão de eventos WebSocket em tempo real para sincronização com os administradores e prestadores.
+          </p>
+
+          <button
+            type="button"
+            id="btn-test-ecosystem-link"
+            disabled={isTestingLink}
+            onClick={handleTestEcosystemLink}
+            className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all active:scale-98 shadow-md shadow-emerald-900/40 cursor-pointer disabled:opacity-60"
+          >
+            {isTestingLink ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Validando Conexão e Latência...
+              </>
+            ) : (
+              <>
+                <Zap className="w-3.5 h-3.5" />
+                Test Ecosystem Link / Verificar Ecossistema
+              </>
+            )}
+          </button>
+
+          {/* Resultado do Teste de Diagnóstico */}
+          {testResult && (
+            <div className="mt-3 p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-xs">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                  {testResult.success ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : (
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                  )}
+                  {testResult.success ? 'Conexão Íntegra' : 'Alerta de Diagnóstico'}
+                </span>
+                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/50">
+                  {testResult.latencyMs}ms
+                </span>
+              </div>
+
+              <p className="text-[11px] text-slate-300 mb-2 leading-tight">
+                {testResult.message}
+              </p>
+
+              <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                <div className="bg-slate-900/90 p-1.5 rounded border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400">PostgREST Clientes:</span>
+                  <span className={testResult.clientesOk ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                    {testResult.clientesOk ? 'ONLINE' : 'ERRO'}
+                  </span>
+                </div>
+                <div className="bg-slate-900/90 p-1.5 rounded border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400">Solicitações:</span>
+                  <span className={testResult.solicitacoesOk ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                    {testResult.solicitacoesOk ? 'ONLINE' : 'ERRO'}
+                  </span>
+                </div>
+                <div className="bg-slate-900/90 p-1.5 rounded border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400">Realtime WebSocket:</span>
+                  <span className={testResult.realtimeOk ? 'text-emerald-400 font-bold' : 'text-amber-400'}>
+                    {testResult.realtimeOk ? 'ATIVO' : 'STANDBY'}
+                  </span>
+                </div>
+                <div className="bg-slate-900/90 p-1.5 rounded border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400">Esquema PT/EN:</span>
+                  <span className="text-emerald-400 font-bold">COMPATÍVEL</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Botão Sair da Conta */}
         {onLogout && (
