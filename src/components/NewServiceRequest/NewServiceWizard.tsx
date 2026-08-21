@@ -55,6 +55,7 @@ export const NewServiceWizard: React.FC<NewServiceWizardProps> = ({
   // Step navigation (1: Tipo, 2: Imóvel, 3: Formato Org, 4: Agendamento, 5: Resumo)
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Form states
   const [serviceType, setServiceType] = useState<ServiceType>('ambos');
@@ -174,6 +175,7 @@ export const NewServiceWizard: React.FC<NewServiceWizardProps> = ({
   };
 
   const handleSubmit = async () => {
+    setSubmitError(null);
     const securityCode = generate4DigitCode();
     const currentYear = new Date().getFullYear();
     const newId = `ORD-${currentYear}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -236,16 +238,18 @@ export const NewServiceWizard: React.FC<NewServiceWizardProps> = ({
 
     setIsSubmitting(true);
     try {
-      // Grava no Supabase (com fallback resiliente local)
+      // Grava diretamente no Supabase sem fallback mascarado
       const res = await salvarSolicitacaoSupabase(newRequest);
-      if (res.data) {
-        onRequestSubmitted(res.data);
+      if (res.success) {
+        onRequestSubmitted(res.data || newRequest);
       } else {
-        onRequestSubmitted(newRequest);
+        const errorMsg = res.error || 'Erro ao persistir a solicitação no banco de dados central.';
+        console.error('[NewServiceWizard handleSubmit] Erro:', errorMsg);
+        setSubmitError(errorMsg);
       }
-    } catch (e) {
-      console.error('Erro ao submeter solicitação:', e);
-      onRequestSubmitted(newRequest);
+    } catch (e: any) {
+      console.error('[NewServiceWizard handleSubmit] Exceção:', e);
+      setSubmitError(e?.message || 'Falha de comunicação ao conectar com o banco Supabase.');
     } finally {
       setIsSubmitting(false);
     }
@@ -1139,6 +1143,21 @@ export const NewServiceWizard: React.FC<NewServiceWizardProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Error Feedback */}
+      {submitError && (
+        <motion.div
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-rose-800 text-xs shadow-xs"
+        >
+          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <span className="font-bold block">Não foi possível enviar a solicitação para o banco de dados</span>
+            <span className="text-slate-600 block">{submitError}</span>
+          </div>
+        </motion.div>
       )}
 
       {/* Navigation Buttons */}

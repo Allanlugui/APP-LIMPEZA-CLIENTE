@@ -1,9 +1,26 @@
 import { createClient } from '@supabase/supabase-js';
 import { ServiceRequest, ServiceStatus, CustomerProfile } from '../types';
 
-// Sanitização e validação das variáveis de ambiente de produção
-const rawSupabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
-const rawSupabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+// Sanitização e validação das variáveis de ambiente de produção (Vercel, Vite, Cloud Run)
+const getEnvVar = (name: string): string => {
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[name]) {
+    return String(import.meta.env[name]).trim();
+  }
+  if (typeof process !== 'undefined' && process.env && process.env[name]) {
+    return String(process.env[name]).trim();
+  }
+  return '';
+};
+
+const rawSupabaseUrl = 
+  getEnvVar('VITE_SUPABASE_URL') || 
+  getEnvVar('SUPABASE_URL') || 
+  getEnvVar('NEXT_PUBLIC_SUPABASE_URL');
+
+const rawSupabaseAnonKey = 
+  getEnvVar('VITE_SUPABASE_ANON_KEY') || 
+  getEnvVar('SUPABASE_ANON_KEY') || 
+  getEnvVar('NEXT_PUBLIC_SUPABASE_ANON_KEY');
 
 // Normaliza a URL (remove barras finais desnecessárias)
 const supabaseUrl = rawSupabaseUrl.replace(/\/+$/, '');
@@ -13,8 +30,18 @@ export const isSupabaseConfigured = Boolean(
   supabaseUrl && 
   supabaseAnonKey && 
   supabaseUrl.startsWith('http') &&
-  supabaseAnonKey !== 'sua_anon_key_aqui'
+  supabaseAnonKey !== 'sua_anon_key_aqui' &&
+  supabaseAnonKey.length > 20
 );
+
+if (!isSupabaseConfigured) {
+  console.warn(
+    '[Supabase Configuration] Variáveis VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY não detectadas ou incompletas no ambiente.',
+    { urlPresent: Boolean(supabaseUrl), keyPresent: Boolean(supabaseAnonKey) }
+  );
+} else {
+  console.info('[Supabase Configuration] Cliente conectado ao projeto:', supabaseUrl);
+}
 
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
@@ -58,12 +85,18 @@ export async function testarConexaoSupabase(): Promise<{
   try {
     const { error: errClientes } = await supabase.from('clientes').select('id').limit(1);
     clientesTableOk = !errClientes;
-  } catch {}
+    if (errClientes) console.warn('[Supabase Diag] Erro na tabela clientes:', errClientes.message);
+  } catch (e) {
+    console.error('[Supabase Diag] Falha na consulta de clientes:', e);
+  }
 
   try {
     const { error: errSolicitacoes } = await supabase.from('solicitacoes_servico').select('id').limit(1);
     solicitacoesTableOk = !errSolicitacoes;
-  } catch {}
+    if (errSolicitacoes) console.warn('[Supabase Diag] Erro na tabela solicitacoes_servico:', errSolicitacoes.message);
+  } catch (e) {
+    console.error('[Supabase Diag] Falha na consulta de solicitacoes_servico:', e);
+  }
 
   const connected = clientesTableOk || solicitacoesTableOk;
 
@@ -204,9 +237,11 @@ export async function salvarSolicitacaoSupabase(
   request: ServiceRequest
 ): Promise<{ success: boolean; data?: ServiceRequest; error?: string }> {
   if (!isSupabaseConfigured || !supabase) {
+    const errorMsg = 'Supabase não está configurado. Verifique as variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.';
+    console.error(`[Supabase salvarSolicitacaoSupabase] ${errorMsg}`);
     return {
-      success: true,
-      data: request,
+      success: false,
+      error: errorMsg,
     };
   }
 
@@ -261,11 +296,13 @@ export async function salvarSolicitacaoSupabase(
       ) {
         const missingCol = extrairColunaInexistente(error);
         if (missingCol && missingCol in payload) {
+          console.warn(`[Supabase Solicitacao Adaptive] Removendo coluna ausente '${missingCol}' e tentando novamente...`);
           delete payload[missingCol];
           continue;
         }
         const nextCol = colunasOpcionais.find((c) => c in payload);
         if (nextCol) {
+          console.warn(`[Supabase Solicitacao Adaptive] Removendo coluna opcional '${nextCol}' e tentando novamente...`);
           delete payload[nextCol];
           continue;
         }
@@ -275,18 +312,24 @@ export async function salvarSolicitacaoSupabase(
     }
 
     if (lastError && !insertedData) {
-      console.warn('Aviso ao salvar solicitação no Supabase:', lastError.message);
+      console.error('[Supabase salvarSolicitacaoSupabase] Erro ao salvar solicitação no banco central:', lastError);
+      return {
+        success: false,
+        error: lastError.message || 'Erro ao persistir solicitação no Supabase.',
+      };
     }
+
+    console.info(`[Supabase salvarSolicitacaoSupabase] Solicitação #${request.id} persistida com sucesso no banco central.`);
 
     return {
       success: true,
       data: insertedData ? mapearDeSupabase(insertedData) : request,
     };
   } catch (err: any) {
-    console.error('Falha de rede ao conectar com Supabase:', err);
+    console.error('[Supabase salvarSolicitacaoSupabase] Exceção de rede ou execução:', err);
     return {
-      success: true,
-      data: request,
+      success: false,
+      error: err?.message || 'Falha de comunicação ao salvar no banco Supabase.',
     };
   }
 }
@@ -300,6 +343,7 @@ export async function buscarSolicitacoesSupabase(
   customerEmail?: string
 ): Promise<ServiceRequest[]> {
   if (!isSupabaseConfigured || !supabase) {
+    console.warn('[Supabase buscarSolicitacoesSupabase] Cliente Supabase não configurado.');
     return [];
   }
 
@@ -337,7 +381,7 @@ export async function buscarSolicitacoesSupabase(
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.warn('Erro ao consultar solicitações no Supabase:', error.message);
+      console.error('[Supabase buscarSolicitacoesSupabase] Erro ao consultar solicitações:', error.message);
       return [];
     }
 
@@ -366,7 +410,7 @@ export async function buscarSolicitacoesSupabase(
 
     return data.map(mapearDeSupabase);
   } catch (err) {
-    console.error('Falha ao buscar solicitações no Supabase:', err);
+    console.error('[Supabase buscarSolicitacoesSupabase] Falha ao buscar solicitações no Supabase:', err);
     return [];
   }
 }
@@ -380,7 +424,9 @@ export async function atualizarStatusSolicitacaoSupabase(
   timelineEntry?: { status: ServiceStatus; timestamp: string; description: string }
 ): Promise<{ success: boolean; error?: string }> {
   if (!isSupabaseConfigured || !supabase) {
-    return { success: true };
+    const err = 'Supabase não configurado.';
+    console.error(`[Supabase atualizarStatusSolicitacaoSupabase] ${err}`);
+    return { success: false, error: err };
   }
 
   try {
@@ -406,13 +452,14 @@ export async function atualizarStatusSolicitacaoSupabase(
       .eq('id', requestId);
 
     if (error) {
-      console.warn('Erro ao atualizar status no Supabase:', error.message);
+      console.error('[Supabase atualizarStatusSolicitacaoSupabase] Erro ao atualizar status:', error.message);
       return { success: false, error: error.message };
     }
 
+    console.info(`[Supabase atualizarStatusSolicitacaoSupabase] Status da solicitação #${requestId} atualizado para '${newStatus}'.`);
     return { success: true };
   } catch (err: any) {
-    console.error('Falha na atualização do status no Supabase:', err);
+    console.error('[Supabase atualizarStatusSolicitacaoSupabase] Exceção ao atualizar status:', err);
     return { success: false, error: err?.message };
   }
 }
@@ -556,8 +603,7 @@ export function mapearClienteDeSupabase(row: any): CustomerProfile {
 }
 
 /**
- * Cadastra um novo cliente na tabela `clientes` do Supabase com tratamento adaptativo
- * de esquema para tabelas existentes que ainda não possuam colunas específicas como `codigo_recuperacao` ou `ultimo_acesso`.
+ * Cadastra um novo cliente na tabela `clientes` do Supabase via chamada direta HTTP/PostgREST
  */
 export async function cadastrarClienteSupabase(
   profile: CustomerProfile,
@@ -565,299 +611,271 @@ export async function cadastrarClienteSupabase(
   recoveryCode: string
 ): Promise<{ success: boolean; profile?: CustomerProfile; error?: string }> {
   try {
+    if (!isSupabaseConfigured || !supabase) {
+      const err = 'Supabase não está configurado. Verifique as credenciais VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY na Vercel/Ambiente.';
+      console.error(`[Supabase cadastrarClienteSupabase] ${err}`);
+      return { success: false, error: err };
+    }
+
     const cleanDoc = profile.documentNumber.replace(/\D/g, '') || profile.documentNumber.trim();
     const cleanEmail = profile.email.trim().toLowerCase();
 
-    if (isSupabaseConfigured && supabase) {
-      // 1. Verifica se já existe cliente com o mesmo CPF/documento ou E-mail
-      try {
-        const { data: existing, error: checkError } = await supabase
-          .from('clientes')
-          .select('id, email, numero_documento')
-          .or(`numero_documento.eq.${cleanDoc},email.eq.${cleanEmail}`)
-          .maybeSingle();
+    // 1. Verifica se já existe cliente com o mesmo CPF/documento ou E-mail
+    try {
+      const { data: existing, error: checkError } = await supabase
+        .from('clientes')
+        .select('id, email, numero_documento')
+        .or(`numero_documento.eq.${cleanDoc},email.eq.${cleanEmail}`)
+        .maybeSingle();
 
-        if (!checkError && existing) {
-          return {
-            success: false,
-            error: 'Já existe uma conta cadastrada com este CPF ou E-mail. Tente fazer login ou recuperar o acesso.',
-          };
-        }
-      } catch (checkErr) {
-        console.warn('Checagem de duplicidade no Supabase:', checkErr);
+      if (!checkError && existing) {
+        return {
+          success: false,
+          error: 'Já existe uma conta cadastrada com este CPF ou E-mail. Faça o login ou recupere o acesso.',
+        };
       }
+    } catch (checkErr) {
+      console.warn('[Supabase cadastrarClienteSupabase] Checagem de duplicidade:', checkErr);
+    }
 
-      // 2. Prepara o payload incluindo os metadados de segurança no JSONB endereco
-      // para garantir persistência mesmo se o schema PostgreSQL não tiver as colunas dedicadas
-      const enderecoComMetadados = {
-        ...profile.address,
-        codigo_recuperacao: recoveryCode,
-        recoveryCode: recoveryCode,
-        senha_hash: passwordHash,
-        documentNumber: cleanDoc,
-        email: cleanEmail,
-      };
+    // 2. Prepara o payload incluindo os metadados de segurança no JSONB endereco
+    const enderecoComMetadados = {
+      ...profile.address,
+      codigo_recuperacao: recoveryCode,
+      recoveryCode: recoveryCode,
+      senha_hash: passwordHash,
+      documentNumber: cleanDoc,
+      email: cleanEmail,
+    };
 
-      const payload: Record<string, any> = {
-        nome_completo: profile.fullName.trim(),
-        tipo_documento: profile.documentType,
-        numero_documento: cleanDoc,
-        email: cleanEmail,
-        telefone: profile.phone.trim(),
-        foto_url: profile.photoUrl || null,
-        endereco: enderecoComMetadados,
-        senha_hash: passwordHash,
-        codigo_recuperacao: recoveryCode,
-        ultimo_acesso: new Date().toISOString(),
-        created_at: profile.createdAt || new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+    const payload: Record<string, any> = {
+      nome_completo: profile.fullName.trim(),
+      tipo_documento: profile.documentType,
+      numero_documento: cleanDoc,
+      email: cleanEmail,
+      telefone: profile.phone.trim(),
+      foto_url: profile.photoUrl || null,
+      endereco: enderecoComMetadados,
+      senha_hash: passwordHash,
+      codigo_recuperacao: recoveryCode,
+      ultimo_acesso: new Date().toISOString(),
+      created_at: profile.createdAt || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
 
-      // Compatibilidade de UUID: Apenas envia 'id' se for um UUID RFC 4122 estritamente válido.
-      // Se for string customizada (ex: 'cust_...'), não envia 'id' para que o PostgreSQL
-      // execute automaticamente o DEFAULT gen_random_uuid() da tabela sem o erro 22P02.
-      if (profile.id && ehUUIDValido(profile.id)) {
-        payload.id = profile.id;
-      }
+    // Apenas envia 'id' se for UUID RFC 4122 estritamente válido
+    if (profile.id && ehUUIDValido(profile.id)) {
+      payload.id = profile.id;
+    }
 
-      // 3. Inspeção prévia de colunas da tabela remota (se houver registros)
-      try {
-        const { data: sampleRows } = await supabase.from('clientes').select('*').limit(1);
-        if (sampleRows && sampleRows.length > 0 && typeof sampleRows[0] === 'object') {
-          const knownCols = new Set(Object.keys(sampleRows[0]));
-          for (const key of Object.keys(payload)) {
-            if (!knownCols.has(key)) {
-              console.warn(`[Supabase Clientes Schema] Coluna '${key}' não detectada na tabela. Removendo do payload para compatibilidade.`);
-              delete payload[key];
-            }
-          }
-        }
-      } catch (inspectErr) {
-        console.warn('Inspeção preliminar de schema:', inspectErr);
-      }
+    const colunasOpcionais = [
+      'codigo_recuperacao',
+      'senha_hash',
+      'ultimo_acesso',
+      'tipo_documento',
+      'updated_at',
+      'foto_url',
+      'created_at',
+    ];
 
-      // 4. Inserção com tolerância e adaptação automática de esquema (PGRST204 e 22P02)
-      const colunasOpcionais = [
-        'codigo_recuperacao',
-        'senha_hash',
-        'ultimo_acesso',
-        'tipo_documento',
-        'updated_at',
-        'foto_url',
-        'created_at',
-      ];
+    let insertedData: any = null;
+    let lastError: any = null;
 
-      let insertedData: any = null;
-      let lastError: any = null;
+    for (let attempt = 0; attempt < 15; attempt++) {
+      // Tentativa A: Insert com retorno de dados (.select().maybeSingle())
+      const { data: inserted, error: insertError } = await supabase
+        .from('clientes')
+        .insert(payload)
+        .select()
+        .maybeSingle();
 
-      for (let attempt = 0; attempt < 15; attempt++) {
-        // Tentativa A: Insert com retorno de dados (.select().maybeSingle())
-        const { data: inserted, error: insertError } = await supabase
-          .from('clientes')
-          .insert(payload)
-          .select()
-          .maybeSingle();
-
-        if (!insertError && inserted) {
-          insertedData = inserted;
-          lastError = null;
-          break;
-        }
-
-        // Tentativa B: Insert simples direto sem .select() caso o select falhe por cache
-        if (insertError && insertError.code !== '23505') {
-          const { error: directInsertErr } = await supabase
-            .from('clientes')
-            .insert(payload);
-
-          if (!directInsertErr) {
-            insertedData = payload;
-            lastError = null;
-            break;
-          }
-        }
-
-        lastError = insertError;
-
-        // Se for duplicidade já cadastrada
-        if (insertError?.code === '23505') {
-          return {
-            success: false,
-            error: 'Este CPF ou E-mail já está cadastrado no sistema. Faça o login ou use a Recuperação de Acesso.',
-          };
-        }
-
-        // Se for erro 22P02 (incompatibilidade de UUID ao tentar inserir ID textual)
-        if (
-          insertError?.code === '22P02' ||
-          insertError?.message?.includes('invalid input syntax for type uuid') ||
-          insertError?.message?.includes('uuid')
-        ) {
-          if ('id' in payload) {
-            console.warn('[Supabase UUID Handler] ID informado não é compatível com tipo UUID no banco. Removendo id explícito para geração automática pelo banco (gen_random_uuid)...');
-            delete payload.id;
-            continue;
-          }
-        }
-
-        // Se for erro de coluna inexistente no schema cache
-        if (
-          insertError?.code === 'PGRST204' ||
-          insertError?.message?.includes('Could not find') ||
-          insertError?.message?.includes('does not exist')
-        ) {
-          const missingCol = extrairColunaInexistente(insertError);
-          if (missingCol && missingCol in payload) {
-            console.warn(`[Supabase Schema Adaptive] Removendo coluna '${missingCol}' ausente no schema e tentando novamente...`);
-            delete payload[missingCol];
-            continue;
-          }
-
-          // Se não encontrou o nome exato pelo regex, remove a próxima coluna opcional
-          const nextOptional = colunasOpcionais.find(col => col in payload);
-          if (nextOptional) {
-            console.warn(`[Supabase Schema Adaptive] Removendo coluna opcional '${nextOptional}' e tentando novamente...`);
-            delete payload[nextOptional];
-            continue;
-          }
-        }
-
-        // Se for outro erro, encerra o loop de retentativas
+      if (!insertError && inserted) {
+        insertedData = inserted;
+        lastError = null;
         break;
       }
 
-      if (lastError && !insertedData) {
-        console.warn('Aviso: Inserção remota no Supabase encontrou restrição no schema, mantendo fallback resiliente:', lastError);
+      // Tentativa B: Insert simples direto sem .select() caso o select falhe por cache
+      if (insertError && insertError.code !== '23505') {
+        const { error: directInsertErr } = await supabase
+          .from('clientes')
+          .insert(payload);
+
+        if (!directInsertErr) {
+          insertedData = payload;
+          lastError = null;
+          break;
+        }
       }
 
-      const idFinal = insertedData?.id || (profile.id && ehUUIDValido(profile.id) ? profile.id : gerarUUIDValido());
+      lastError = insertError;
 
+      // Se for duplicidade já cadastrada
+      if (insertError?.code === '23505') {
+        return {
+          success: false,
+          error: 'Este CPF ou E-mail já está cadastrado no sistema. Faça o login ou use a Recuperação de Acesso.',
+        };
+      }
+
+      // Se for erro 22P02 (incompatibilidade de UUID ao tentar inserir ID textual)
+      if (
+        insertError?.code === '22P02' ||
+        insertError?.message?.includes('invalid input syntax for type uuid') ||
+        insertError?.message?.includes('uuid')
+      ) {
+        if ('id' in payload) {
+          console.warn('[Supabase UUID Handler] Removendo id explícito para geração automática pelo banco...');
+          delete payload.id;
+          continue;
+        }
+      }
+
+      // Se for erro de coluna inexistente no schema cache
+      if (
+        insertError?.code === 'PGRST204' ||
+        insertError?.message?.includes('Could not find') ||
+        insertError?.message?.includes('does not exist')
+      ) {
+        const missingCol = extrairColunaInexistente(insertError);
+        if (missingCol && missingCol in payload) {
+          console.warn(`[Supabase Schema Adaptive] Removendo coluna '${missingCol}' ausente no schema e tentando novamente...`);
+          delete payload[missingCol];
+          continue;
+        }
+
+        const nextOptional = colunasOpcionais.find(col => col in payload);
+        if (nextOptional) {
+          console.warn(`[Supabase Schema Adaptive] Removendo coluna opcional '${nextOptional}' e tentando novamente...`);
+          delete payload[nextOptional];
+          continue;
+        }
+      }
+
+      break;
+    }
+
+    if (lastError && !insertedData) {
+      console.error('[Supabase cadastrarClienteSupabase] Erro ao cadastrar cliente no Supabase:', lastError);
       return {
-        success: true,
-        profile: {
-          ...mapearClienteDeSupabase(insertedData || { ...payload, id: idFinal }),
-          id: idFinal,
-          recoveryCode,
-        },
+        success: false,
+        error: lastError.message || 'Erro ao registrar cliente no banco de dados Supabase.',
       };
     }
 
-    // Fallback local caso Supabase não esteja configurado
-    const idLocal = profile.id && ehUUIDValido(profile.id) ? profile.id : gerarUUIDValido();
+    const idFinal = insertedData?.id || (profile.id && ehUUIDValido(profile.id) ? profile.id : gerarUUIDValido());
+    console.info('[Supabase cadastrarClienteSupabase] Cliente cadastrado com sucesso no Supabase:', idFinal);
+
     return {
       success: true,
       profile: {
-        ...profile,
-        id: idLocal,
+        ...mapearClienteDeSupabase(insertedData || { ...payload, id: idFinal }),
+        id: idFinal,
         recoveryCode,
       },
     };
   } catch (err: any) {
-    console.error('Erro no cadastro do cliente:', err);
+    console.error('[Supabase cadastrarClienteSupabase] Erro de rede ou execução no cadastro do cliente:', err);
     return {
-      success: true,
-      profile: {
-        ...profile,
-        recoveryCode,
-      },
+      success: false,
+      error: err?.message || 'Falha ao conectar com o banco de dados para realizar o cadastro.',
     };
   }
 }
 
 /**
- * Autentica o cliente consultando a tabela `clientes` no Supabase por CPF ou E-mail e Senha Hash
+ * Autentica o cliente consultando estritamente a tabela `clientes` no Supabase por CPF ou E-mail e Senha Hash
  */
 export async function autenticarClienteSupabase(
   identifier: string,
   passwordHash: string
 ): Promise<{ success: boolean; profile?: CustomerProfile; error?: string }> {
   try {
+    if (!isSupabaseConfigured || !supabase) {
+      const err = 'Serviço de autenticação não configurado (credenciais Supabase ausentes).';
+      console.error(`[Supabase autenticarClienteSupabase] ${err}`);
+      return { success: false, error: err };
+    }
+
     const trimmed = identifier.trim();
     const cleanDoc = trimmed.replace(/\D/g, '');
     const cleanEmail = trimmed.toLowerCase();
 
-    if (isSupabaseConfigured && supabase) {
-      let cliente: any = null;
+    let cliente: any = null;
 
-      // Tentativa 1: busca direta por email ou numero_documento
+    // Tentativa 1: busca direta por email ou numero_documento
+    try {
+      let query = supabase.from('clientes').select('*');
+      if (trimmed.includes('@')) {
+        query = query.eq('email', cleanEmail);
+      } else if (cleanDoc.length > 0) {
+        query = query.or(`numero_documento.eq.${cleanDoc},numero_documento.eq.${trimmed}`);
+      } else {
+        query = query.eq('email', cleanEmail);
+      }
+
+      const { data, error } = await query.maybeSingle();
+      if (!error && data) {
+        cliente = data;
+      }
+    } catch (qErr) {
+      console.warn('[Supabase autenticarClienteSupabase] Erro ao consultar por filtro específico:', qErr);
+    }
+
+    // Tentativa 2: fallback de busca ampla se query falhar por incompatibilidade de coluna
+    if (!cliente) {
       try {
-        let query = supabase.from('clientes').select('*');
-        if (trimmed.includes('@')) {
-          query = query.eq('email', cleanEmail);
-        } else if (cleanDoc.length > 0) {
-          query = query.or(`numero_documento.eq.${cleanDoc},numero_documento.eq.${trimmed}`);
-        } else {
-          query = query.eq('email', cleanEmail);
+        const { data: allClientes } = await supabase.from('clientes').select('*').limit(200);
+        if (allClientes && Array.isArray(allClientes)) {
+          cliente = allClientes.find((c: any) => {
+            const cDoc = String(c.numero_documento || c.document_number || c.cpf || c.endereco?.cpf || c.endereco?.documentNumber || '').replace(/\D/g, '');
+            const cEmail = String(c.email || c.endereco?.email || '').toLowerCase();
+            return cEmail === cleanEmail || (cleanDoc.length > 0 && cDoc === cleanDoc) || c.numero_documento === trimmed;
+          });
         }
-
-        const { data, error } = await query.maybeSingle();
-        if (!error && data) {
-          cliente = data;
-        }
-      } catch (qErr) {
-        console.warn('Erro ao consultar por filtro específico:', qErr);
+      } catch (fbErr) {
+        console.warn('[Supabase autenticarClienteSupabase] Erro no fallback de clientes:', fbErr);
       }
+    }
 
-      // Tentativa 2: fallback de busca ampla se query falhar por incompatibilidade de coluna
-      if (!cliente) {
-        try {
-          const { data: allClientes } = await supabase.from('clientes').select('*').limit(100);
-          if (allClientes && Array.isArray(allClientes)) {
-            cliente = allClientes.find((c: any) => {
-              const cDoc = String(c.numero_documento || c.document_number || c.cpf || c.endereco?.cpf || c.endereco?.documentNumber || '').replace(/\D/g, '');
-              const cEmail = String(c.email || c.endereco?.email || '').toLowerCase();
-              return cEmail === cleanEmail || (cleanDoc.length > 0 && cDoc === cleanDoc) || c.numero_documento === trimmed;
-            });
-          }
-        } catch (fbErr) {
-          console.warn('Erro no fallback de clientes:', fbErr);
-        }
-      }
-
-      if (!cliente) {
-        return {
-          success: false,
-          error: 'Nenhuma conta encontrada com este CPF ou E-mail. Verifique os dados ou realize o Primeiro Acesso.',
-        };
-      }
-
-      // Validação resiliente do hash da senha (coluna dedicada ou metadados no endereço)
-      const storedHash = 
-        cliente.senha_hash || 
-        cliente.password_hash || 
-        cliente.endereco?.senha_hash || 
-        cliente.endereco?.password_hash;
-
-      if (storedHash && storedHash !== passwordHash) {
-        return {
-          success: false,
-          error: 'Senha incorreta. Verifique a senha digitada ou utilize a Recuperação de Acesso.',
-        };
-      }
-
-      // Atualiza data do último acesso no Supabase em background de forma segura
-      try {
-        supabase
-          .from('clientes')
-          .update({ ultimo_acesso: new Date().toISOString(), updated_at: new Date().toISOString() })
-          .eq('id', cliente.id)
-          .then();
-      } catch {
-        // Silencioso se a coluna não existir
-      }
-
+    if (!cliente) {
       return {
-        success: true,
-        profile: mapearClienteDeSupabase(cliente),
+        success: false,
+        error: 'Nenhuma conta encontrada com este CPF ou E-mail no banco de dados. Verifique os dados ou realize o Primeiro Acesso.',
       };
     }
 
+    // Validação do hash da senha
+    const storedHash = 
+      cliente.senha_hash || 
+      cliente.password_hash || 
+      cliente.endereco?.senha_hash || 
+      cliente.endereco?.password_hash;
+
+    if (storedHash && storedHash !== passwordHash) {
+      return {
+        success: false,
+        error: 'Senha incorreta. Verifique a senha digitada ou utilize a Recuperação de Acesso.',
+      };
+    }
+
+    // Atualiza data do último acesso no Supabase em background
+    try {
+      supabase
+        .from('clientes')
+        .update({ ultimo_acesso: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('id', cliente.id)
+        .then();
+    } catch {}
+
+    console.info('[Supabase autenticarClienteSupabase] Login realizado com sucesso para:', cliente.email || cliente.id);
+
     return {
-      success: false,
-      error: 'Serviço de autenticação não configurado no momento.',
+      success: true,
+      profile: mapearClienteDeSupabase(cliente),
     };
   } catch (err: any) {
-    console.error('Erro na autenticação do cliente:', err);
+    console.error('[Supabase autenticarClienteSupabase] Erro na autenticação do cliente:', err);
     return {
       success: false,
       error: err?.message || 'Erro inesperado durante a autenticação.',
@@ -866,7 +884,7 @@ export async function autenticarClienteSupabase(
 }
 
 /**
- * Recupera o acesso e redefine a senha do cliente usando o Código Único de 6 Dígitos
+ * Recupera o acesso e redefine a senha do cliente usando o Código Único de 6 Dígitos diretamente no Supabase
  */
 export async function recuperarSenhaClienteSupabase(
   identifier: string,
@@ -874,6 +892,12 @@ export async function recuperarSenhaClienteSupabase(
   newPasswordHash: string
 ): Promise<{ success: boolean; profile?: CustomerProfile; error?: string }> {
   try {
+    if (!isSupabaseConfigured || !supabase) {
+      const err = 'Serviço de banco de dados offline (credenciais Supabase ausentes).';
+      console.error(`[Supabase recuperarSenhaClienteSupabase] ${err}`);
+      return { success: false, error: err };
+    }
+
     const trimmed = identifier.trim();
     const cleanDoc = trimmed.replace(/\D/g, '');
     const cleanEmail = trimmed.toLowerCase();
@@ -886,147 +910,146 @@ export async function recuperarSenhaClienteSupabase(
       };
     }
 
-    if (isSupabaseConfigured && supabase) {
-      let cliente: any = null;
+    let cliente: any = null;
 
-      try {
-        let query = supabase.from('clientes').select('*');
-        if (trimmed.includes('@')) {
-          query = query.eq('email', cleanEmail);
-        } else if (cleanDoc.length > 0) {
-          query = query.or(`numero_documento.eq.${cleanDoc},numero_documento.eq.${trimmed}`);
-        } else {
-          query = query.eq('email', cleanEmail);
-        }
-
-        const { data, error: findError } = await query.maybeSingle();
-        if (!findError && data) {
-          cliente = data;
-        }
-      } catch (findErr) {
-        console.warn('Erro ao buscar cliente para recuperação:', findErr);
+    try {
+      let query = supabase.from('clientes').select('*');
+      if (trimmed.includes('@')) {
+        query = query.eq('email', cleanEmail);
+      } else if (cleanDoc.length > 0) {
+        query = query.or(`numero_documento.eq.${cleanDoc},numero_documento.eq.${trimmed}`);
+      } else {
+        query = query.eq('email', cleanEmail);
       }
 
-      // Fallback de busca
-      if (!cliente) {
-        const { data: allClientes } = await supabase.from('clientes').select('*').limit(100);
-        if (allClientes && Array.isArray(allClientes)) {
-          cliente = allClientes.find((c: any) => {
-            const cDoc = String(c.numero_documento || c.document_number || c.cpf || c.endereco?.cpf || '').replace(/\D/g, '');
-            const cEmail = String(c.email || c.endereco?.email || '').toLowerCase();
-            return cEmail === cleanEmail || (cleanDoc.length > 0 && cDoc === cleanDoc);
-          });
-        }
+      const { data, error: findError } = await query.maybeSingle();
+      if (!findError && data) {
+        cliente = data;
       }
+    } catch (findErr) {
+      console.warn('[Supabase recuperarSenhaClienteSupabase] Erro ao buscar cliente:', findErr);
+    }
 
-      if (!cliente) {
-        return {
-          success: false,
-          error: 'Cliente não encontrado com o CPF ou E-mail informado.',
-        };
+    // Fallback de busca
+    if (!cliente) {
+      const { data: allClientes } = await supabase.from('clientes').select('*').limit(200);
+      if (allClientes && Array.isArray(allClientes)) {
+        cliente = allClientes.find((c: any) => {
+          const cDoc = String(c.numero_documento || c.document_number || c.cpf || c.endereco?.cpf || '').replace(/\D/g, '');
+          const cEmail = String(c.email || c.endereco?.email || '').toLowerCase();
+          return cEmail === cleanEmail || (cleanDoc.length > 0 && cDoc === cleanDoc);
+        });
       }
+    }
 
-      // Validação do Código de Recuperação em múltiplas fontes
-      const rawEndereco = typeof cliente.endereco === 'object' && cliente.endereco !== null ? cliente.endereco : {};
-      const codigoSalvo = String(
-        cliente.codigo_recuperacao || 
-        cliente.recovery_code || 
-        rawEndereco.codigo_recuperacao || 
-        rawEndereco.recoveryCode || 
-        ''
-      ).trim();
-
-      if (codigoSalvo && codigoSalvo !== cleanCode) {
-        return {
-          success: false,
-          error: 'Código único de recuperação inválido para esta conta. Verifique os 6 dígitos fornecidos no cadastro.',
-        };
-      }
-
-      // Prepara o novo endereço com o hash e código atualizados
-      const updatedEndereco = {
-        ...rawEndereco,
-        senha_hash: newPasswordHash,
-        codigo_recuperacao: cleanCode,
-        recoveryCode: cleanCode,
-      };
-
-      const updatePayload: Record<string, any> = {
-        senha_hash: newPasswordHash,
-        endereco: updatedEndereco,
-        updated_at: new Date().toISOString(),
-      };
-
-      let updatedRecord: any = null;
-      let lastUpdateError: any = null;
-
-      for (let attempt = 0; attempt < 10; attempt++) {
-        const { data: updated, error: updateError } = await supabase
-          .from('clientes')
-          .update(updatePayload)
-          .eq('id', cliente.id)
-          .select()
-          .maybeSingle();
-
-        if (!updateError && updated) {
-          updatedRecord = updated;
-          lastUpdateError = null;
-          break;
-        }
-
-        // Tentativa de update simples direto sem .select()
-        if (updateError) {
-          const { error: directUpErr } = await supabase
-            .from('clientes')
-            .update(updatePayload)
-            .eq('id', cliente.id);
-
-          if (!directUpErr) {
-            updatedRecord = { ...cliente, ...updatePayload };
-            lastUpdateError = null;
-            break;
-          }
-        }
-
-        lastUpdateError = updateError;
-        if (
-          updateError?.code === 'PGRST204' ||
-          updateError?.message?.includes('Could not find') ||
-          updateError?.message?.includes('does not exist')
-        ) {
-          const missingCol = extrairColunaInexistente(updateError);
-          if (missingCol && missingCol in updatePayload) {
-            delete updatePayload[missingCol];
-            continue;
-          }
-          if ('senha_hash' in updatePayload) {
-            delete updatePayload.senha_hash;
-            continue;
-          }
-          if ('updated_at' in updatePayload) {
-            delete updatePayload.updated_at;
-            continue;
-          }
-        }
-        break;
-      }
-
-      if (lastUpdateError && !updatedRecord) {
-        console.warn('Aviso ao atualizar senha no Supabase, aplicando atualização no perfil local:', lastUpdateError);
-      }
-
+    if (!cliente) {
       return {
-        success: true,
-        profile: mapearClienteDeSupabase(updatedRecord || { ...cliente, endereco: updatedEndereco }),
+        success: false,
+        error: 'Cliente não encontrado com o CPF ou E-mail informado no banco central.',
       };
     }
 
+    // Validação do Código de Recuperação
+    const rawEndereco = typeof cliente.endereco === 'object' && cliente.endereco !== null ? cliente.endereco : {};
+    const codigoSalvo = String(
+      cliente.codigo_recuperacao || 
+      cliente.recovery_code || 
+      rawEndereco.codigo_recuperacao || 
+      rawEndereco.recoveryCode || 
+      ''
+    ).trim();
+
+    if (codigoSalvo && codigoSalvo !== cleanCode) {
+      return {
+        success: false,
+        error: 'Código único de recuperação inválido para esta conta. Verifique os 6 dígitos fornecidos no cadastro.',
+      };
+    }
+
+    // Prepara o novo endereço com o hash e código atualizados
+    const updatedEndereco = {
+      ...rawEndereco,
+      senha_hash: newPasswordHash,
+      codigo_recuperacao: cleanCode,
+      recoveryCode: cleanCode,
+    };
+
+    const updatePayload: Record<string, any> = {
+      senha_hash: newPasswordHash,
+      endereco: updatedEndereco,
+      updated_at: new Date().toISOString(),
+    };
+
+    let updatedRecord: any = null;
+    let lastUpdateError: any = null;
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const { data: updated, error: updateError } = await supabase
+        .from('clientes')
+        .update(updatePayload)
+        .eq('id', cliente.id)
+        .select()
+        .maybeSingle();
+
+      if (!updateError && updated) {
+        updatedRecord = updated;
+        lastUpdateError = null;
+        break;
+      }
+
+      // Tentativa de update simples direto sem .select()
+      if (updateError) {
+        const { error: directUpErr } = await supabase
+          .from('clientes')
+          .update(updatePayload)
+          .eq('id', cliente.id);
+
+        if (!directUpErr) {
+          updatedRecord = { ...cliente, ...updatePayload };
+          lastUpdateError = null;
+          break;
+        }
+      }
+
+      lastUpdateError = updateError;
+      if (
+        updateError?.code === 'PGRST204' ||
+        updateError?.message?.includes('Could not find') ||
+        updateError?.message?.includes('does not exist')
+      ) {
+        const missingCol = extrairColunaInexistente(updateError);
+        if (missingCol && missingCol in updatePayload) {
+          delete updatePayload[missingCol];
+          continue;
+        }
+        if ('senha_hash' in updatePayload) {
+          delete updatePayload.senha_hash;
+          continue;
+        }
+        if ('updated_at' in updatePayload) {
+          delete updatePayload.updated_at;
+          continue;
+        }
+      }
+      break;
+    }
+
+    if (lastUpdateError && !updatedRecord) {
+      console.error('[Supabase recuperarSenhaClienteSupabase] Erro ao redefinir senha no Supabase:', lastUpdateError);
+      return {
+        success: false,
+        error: lastUpdateError.message || 'Falha ao atualizar a senha no banco de dados.',
+      };
+    }
+
+    console.info('[Supabase recuperarSenhaClienteSupabase] Senha redefinida com sucesso no Supabase para cliente:', cliente.id);
+
     return {
-      success: false,
-      error: 'Serviço de banco de dados offline.',
+      success: true,
+      profile: mapearClienteDeSupabase(updatedRecord || { ...cliente, endereco: updatedEndereco }),
     };
   } catch (err: any) {
-    console.error('Erro na recuperação de senha:', err);
+    console.error('[Supabase recuperarSenhaClienteSupabase] Erro na recuperação de senha:', err);
     return {
       success: false,
       error: err?.message || 'Erro inesperado na recuperação de acesso.',
@@ -1042,7 +1065,9 @@ export async function atualizarPerfilClienteSupabase(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     if (!isSupabaseConfigured || !supabase) {
-      return { success: true };
+      const err = 'Supabase não configurado.';
+      console.error(`[Supabase atualizarPerfilClienteSupabase] ${err}`);
+      return { success: false, error: err };
     }
 
     const payload: Record<string, any> = {
@@ -1073,6 +1098,7 @@ export async function atualizarPerfilClienteSupabase(
         .eq('id', profile.id);
 
       if (!error) {
+        console.info('[Supabase atualizarPerfilClienteSupabase] Perfil do cliente atualizado com sucesso no Supabase:', profile.id);
         return { success: true };
       }
 
@@ -1093,13 +1119,14 @@ export async function atualizarPerfilClienteSupabase(
         }
       }
 
-      console.warn('Erro ao atualizar perfil no Supabase:', error.message);
-      return { success: true };
+      console.error('[Supabase atualizarPerfilClienteSupabase] Erro ao atualizar perfil no Supabase:', error.message);
+      return { success: false, error: error.message };
     }
 
     return { success: true };
   } catch (err: any) {
-    return { success: true };
+    console.error('[Supabase atualizarPerfilClienteSupabase] Exceção ao atualizar perfil:', err);
+    return { success: false, error: err?.message };
   }
 }
 

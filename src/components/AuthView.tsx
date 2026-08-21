@@ -34,10 +34,7 @@ import {
   isSupabaseConfigured
 } from '../lib/supabase';
 import { 
-  saveStoredAuthSession, 
-  saveLocalRegisteredAccount, 
-  getLocalRegisteredAccounts,
-  updateLocalAccountPassword
+  saveStoredAuthSession 
 } from '../utils/storage';
 
 type AuthMode = 'login' | 'register' | 'recover' | 'recovery_success_view';
@@ -163,62 +160,22 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
 
     try {
       const passHash = await hashPassword(password);
+      const res = await autenticarClienteSupabase(identifier, passHash);
 
-      // 1. Tenta autenticar via Supabase
-      if (isSupabaseConfigured) {
-        const res = await autenticarClienteSupabase(identifier, passHash);
-        if (res.success && res.profile) {
-          const session: AuthSession = {
-            customer: res.profile,
-            rememberMe,
-            lastLogin: new Date().toISOString(),
-          };
-          saveStoredAuthSession(session);
-          onAuthenticated(session);
-          return;
-        } else if (res.error) {
-          setLoginError(res.error);
-          setIsSubmittingLogin(false);
-          return;
-        }
+      if (res.success && res.profile) {
+        const session: AuthSession = {
+          customer: res.profile,
+          rememberMe,
+          lastLogin: new Date().toISOString(),
+        };
+        saveStoredAuthSession(session);
+        onAuthenticated(session);
+      } else {
+        setLoginError(res.error || 'Conta não localizada ou credenciais incorretas no banco de dados.');
       }
-
-      // 2. Fallback / Validação local
-      const localAccounts = getLocalRegisteredAccounts();
-      const cleanId = identifier.toLowerCase();
-      const digitsOnly = identifier.replace(/\D/g, '');
-
-      const matchedAccount = localAccounts.find((acc) => {
-        const accDigits = acc.profile.documentNumber.replace(/\D/g, '');
-        const accEmail = acc.profile.email.toLowerCase();
-        return (
-          accEmail === cleanId ||
-          (digitsOnly.length > 0 && accDigits === digitsOnly) ||
-          acc.profile.documentNumber.toLowerCase() === cleanId
-        );
-      });
-
-      if (matchedAccount) {
-        if (matchedAccount.passwordHash === passHash) {
-          const session: AuthSession = {
-            customer: matchedAccount.profile,
-            rememberMe,
-            lastLogin: new Date().toISOString(),
-          };
-          saveStoredAuthSession(session);
-          onAuthenticated(session);
-          return;
-        } else {
-          setLoginError('Senha incorreta. Verifique a senha digitada ou utilize a Recuperação de Acesso.');
-          setIsSubmittingLogin(false);
-          return;
-        }
-      }
-
-      // Se não encontrou nem no Supabase nem local
-      setLoginError('Conta não localizada com o CPF ou E-mail informado. Faça o Primeiro Acesso para se cadastrar.');
     } catch (err: any) {
-      setLoginError(err?.message || 'Falha ao autenticar. Tente novamente.');
+      console.error('[AuthView handleLoginSubmit] Erro:', err);
+      setLoginError(err?.message || 'Falha ao autenticar no servidor. Tente novamente.');
     } finally {
       setIsSubmittingLogin(false);
     }
@@ -288,29 +245,22 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
         createdAt: new Date().toISOString(),
       };
 
-      // 1. Salva no Supabase
+      // Salva diretamente no banco Supabase
       const supabaseRes = await cadastrarClienteSupabase(newProfile, passHash, recoveryCode);
       if (!supabaseRes.success) {
         setRegError(supabaseRes.error || 'Erro ao registrar no banco de dados.');
-        setIsSubmittingReg(false);
         return;
       }
 
       const finalizedProfile = supabaseRes.profile || newProfile;
 
-      // 2. Salva no registro local para acesso offline resiliente
-      saveLocalRegisteredAccount({
-        profile: finalizedProfile,
-        passwordHash: passHash,
-        recoveryCode,
-      });
-
-      // 3. Apresenta o Código de Recuperação ao cliente
+      // Apresenta o Código de Recuperação ao cliente
       setCreatedProfile(finalizedProfile);
       setCreatedRecoveryCode(recoveryCode);
       setMode('recovery_success_view');
     } catch (err: any) {
-      setRegError(err?.message || 'Falha ao cadastrar cliente. Tente novamente.');
+      console.error('[AuthView handleRegisterSubmit] Erro:', err);
+      setRegError(err?.message || 'Falha ao cadastrar cliente no banco central. Tente novamente.');
     } finally {
       setIsSubmittingReg(false);
     }
@@ -360,71 +310,25 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
 
     try {
       const passHash = await hashPassword(newPass);
+      const res = await recuperarSenhaClienteSupabase(identifier, code, passHash);
 
-      // 1. Tenta recuperar via Supabase
-      if (isSupabaseConfigured) {
-        const res = await recuperarSenhaClienteSupabase(identifier, code, passHash);
-        if (res.success && res.profile) {
-          updateLocalAccountPassword(identifier, passHash);
-          setRecoverSuccessMsg('Senha redefinida com sucesso! Redirecionando para o aplicativo...');
-          setTimeout(() => {
-            const session: AuthSession = {
-              customer: res.profile!,
-              rememberMe: true,
-              lastLogin: new Date().toISOString(),
-            };
-            saveStoredAuthSession(session);
-            onAuthenticated(session);
-          }, 1200);
-          return;
-        } else if (res.error) {
-          setRecoverError(res.error);
-          setIsSubmittingRecover(false);
-          return;
-        }
+      if (res.success && res.profile) {
+        setRecoverSuccessMsg('Senha redefinida com sucesso no banco de dados! Redirecionando para o aplicativo...');
+        setTimeout(() => {
+          const session: AuthSession = {
+            customer: res.profile!,
+            rememberMe: true,
+            lastLogin: new Date().toISOString(),
+          };
+          saveStoredAuthSession(session);
+          onAuthenticated(session);
+        }, 1200);
+      } else {
+        setRecoverError(res.error || 'Não foi possível redefinir a senha no banco de dados.');
       }
-
-      // 2. Fallback local
-      const localAccounts = getLocalRegisteredAccounts();
-      const cleanId = identifier.toLowerCase();
-      const digitsOnly = identifier.replace(/\D/g, '');
-
-      const matchedAccount = localAccounts.find((acc) => {
-        const accDigits = acc.profile.documentNumber.replace(/\D/g, '');
-        const accEmail = acc.profile.email.toLowerCase();
-        return (
-          accEmail === cleanId ||
-          (digitsOnly.length > 0 && accDigits === digitsOnly) ||
-          acc.profile.documentNumber.toLowerCase() === cleanId
-        );
-      });
-
-      if (!matchedAccount) {
-        setRecoverError('Conta não encontrada com os dados informados.');
-        setIsSubmittingRecover(false);
-        return;
-      }
-
-      if (matchedAccount.recoveryCode !== code) {
-        setRecoverError('Código de recuperação inválido para esta conta.');
-        setIsSubmittingRecover(false);
-        return;
-      }
-
-      // Atualiza senha localmente
-      updateLocalAccountPassword(identifier, passHash);
-      setRecoverSuccessMsg('Senha redefinida com sucesso! Acessando...');
-      setTimeout(() => {
-        const session: AuthSession = {
-          customer: matchedAccount.profile,
-          rememberMe: true,
-          lastLogin: new Date().toISOString(),
-        };
-        saveStoredAuthSession(session);
-        onAuthenticated(session);
-      }, 1000);
     } catch (err: any) {
-      setRecoverError(err?.message || 'Erro ao recuperar senha.');
+      console.error('[AuthView handleRecoverSubmit] Erro:', err);
+      setRecoverError(err?.message || 'Erro ao recuperar senha no servidor.');
     } finally {
       setIsSubmittingRecover(false);
     }
